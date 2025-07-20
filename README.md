@@ -46,7 +46,7 @@
 
 ```bash
 # 克隆或下载项目
-git clone。[<repository-url>](https://github.com/haohaoi34/jiankong.git)
+git clone https://github.com/haohaoi34/jiankong.git
 cd MultiChainWalletMonitor
 
 # 或使用现有文件夹
