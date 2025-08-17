@@ -231,13 +231,10 @@ def enhanced_safe_input(prompt: str, default: str = "") -> str:
     try:
         # 确保输出缓冲区刷新
         sys.stdout.flush()
+        sys.stderr.flush()
         
-        # 检查stdin是否可用
-        if not sys.stdin.isatty():
-            print(f"\n{Fore.YELLOW}⚠️ 非交互模式，使用默认值: {default}{Style.RESET_ALL}")
-            return default
-        
-        # 尝试获取输入
+        # 强制交互模式 - 移除isatty检查，因为它在某些环境下会误判
+        # 直接尝试获取用户输入
         user_input = input(prompt)
         result = user_input.strip()
         
@@ -2193,9 +2190,21 @@ class WalletMonitor:
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             print(f"{Fore.GREEN}💡 系统就绪，等待您的选择...{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}📝 请输入数字1-7，然后按回车键确认{Style.RESET_ALL}")
             
             try:
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7").strip()
+                # 确保提示信息完全显示
+                import sys
+                sys.stdout.flush()
+                
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "").strip()
+                
+                # 处理空输入
+                if not choice:
+                    print(f"\n{Fore.YELLOW}⚠️ 您没有输入任何内容，请输入 1-7{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}💡 提示: 请输入菜单中显示的数字，然后按回车键{Style.RESET_ALL}")
+                    time.sleep(2)
+                    continue
                 
                 # 显示用户选择的确认
                 print(f"{Fore.GREEN}✅ 您选择了: {choice}{Style.RESET_ALL}")
@@ -2337,16 +2346,9 @@ def main():
         # 智能缓存清理
         smart_cache_cleanup()
         
-        # 输入流健康检查
-        print(f"{Fore.CYAN}🔍 输入流健康检查...{Style.RESET_ALL}")
-        try:
-            import sys
-            if sys.stdin.isatty():
-                print(f"{Fore.GREEN}✅ 交互模式正常{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.YELLOW}⚠️ 非交互模式，将使用默认值{Style.RESET_ALL}")
-        except:
-            print(f"{Fore.YELLOW}⚠️ 输入流检查失败，将使用安全模式{Style.RESET_ALL}")
+        # 强制交互模式启动
+        print(f"{Fore.CYAN}🔍 启用强制交互模式...{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✅ 交互模式已启用{Style.RESET_ALL}")
         
         print(f"{Fore.GREEN}✨ 自动进入主菜单模式{Style.RESET_ALL}")
         time.sleep(1)
@@ -2365,6 +2367,28 @@ def main():
         print(f"{Fore.YELLOW}💡 请检查网络连接和依赖安装{Style.RESET_ALL}")
         sys.exit(1)
 
+def force_interactive_mode():
+    """强制启用交互模式"""
+    import sys
+    import os
+    
+    # 确保标准输入输出都是可用的
+    try:
+        # 尝试重新打开标准输入
+        if not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty():
+            # 在某些环境下，重新打开tty
+            if os.path.exists('/dev/tty'):
+                sys.stdin = open('/dev/tty', 'r')
+                print(f"{Fore.GREEN}✅ 已重新连接到交互终端{Style.RESET_ALL}")
+    except:
+        pass
+    
+    # 确保输出缓冲
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
+    print(f"{Fore.GREEN}🎯 强制交互模式已启用{Style.RESET_ALL}")
+
 if __name__ == "__main__":
     # 检查命令行参数
     import sys
@@ -2380,5 +2404,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"{Fore.RED}❌ 安全模式启动失败: {e}{Style.RESET_ALL}")
     else:
+        # 强制启用交互模式
+        force_interactive_mode()
         # 自动启动主程序
         main()
