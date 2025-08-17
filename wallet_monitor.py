@@ -74,44 +74,32 @@ PRIVATE_KEYS_FILE = "private_keys.json"
 MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "monitor_config.json"
 
-# Alchemy支持的所有EVM兼容链
+# Alchemy支持的EVM兼容链 (基于实际可用的网络)
 SUPPORTED_NETWORKS = {
     "eth_mainnet": Network.ETH_MAINNET,
-    "eth_sepolia": Network.ETH_SEPOLIA,
-    "eth_holesky": Network.ETH_HOLESKY,
+    "eth_goerli": Network.ETH_GOERLI,
     "matic_mainnet": Network.MATIC_MAINNET,
     "matic_mumbai": Network.MATIC_MUMBAI,
-    "matic_amoy": Network.MATIC_AMOY,
     "arb_mainnet": Network.ARB_MAINNET,
-    "arb_sepolia": Network.ARB_SEPOLIA,
+    "arb_goerli": Network.ARB_GOERLI,
     "opt_mainnet": Network.OPT_MAINNET,
-    "opt_sepolia": Network.OPT_SEPOLIA,
-    "base_mainnet": Network.BASE_MAINNET,
-    "base_sepolia": Network.BASE_SEPOLIA,
-    "bnb_mainnet": Network.BNB_MAINNET,
-    "bnb_testnet": Network.BNB_TESTNET,
-    "avax_mainnet": Network.AVAX_MAINNET,
-    "avax_fuji": Network.AVAX_FUJI,
+    "opt_goerli": Network.OPT_GOERLI,
+    "opt_kovan": Network.OPT_KOVAN,
+    "astar_mainnet": Network.ASTAR_MAINNET,
 }
 
 # 网络显示名称
 NETWORK_NAMES = {
     "eth_mainnet": "Ethereum 主网",
-    "eth_sepolia": "Ethereum Sepolia 测试网",
-    "eth_holesky": "Ethereum Holesky 测试网",
+    "eth_goerli": "Ethereum Goerli 测试网",
     "matic_mainnet": "Polygon 主网",
     "matic_mumbai": "Polygon Mumbai 测试网",
-    "matic_amoy": "Polygon Amoy 测试网",
     "arb_mainnet": "Arbitrum 主网",
-    "arb_sepolia": "Arbitrum Sepolia 测试网",
+    "arb_goerli": "Arbitrum Goerli 测试网",
     "opt_mainnet": "Optimism 主网",
-    "opt_sepolia": "Optimism Sepolia 测试网",
-    "base_mainnet": "Base 主网",
-    "base_sepolia": "Base Sepolia 测试网",
-    "bnb_mainnet": "BNB Chain 主网",
-    "bnb_testnet": "BNB Chain 测试网",
-    "avax_mainnet": "Avalanche 主网",
-    "avax_fuji": "Avalanche Fuji 测试网",
+    "opt_goerli": "Optimism Goerli 测试网",
+    "opt_kovan": "Optimism Kovan 测试网",
+    "astar_mainnet": "Astar 主网",
 }
 
 @dataclass
