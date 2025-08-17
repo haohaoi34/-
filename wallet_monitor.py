@@ -680,12 +680,14 @@ class WalletMonitor:
                 elif choice == "2":
                     self.start_monitoring_menu()
                 elif choice == "3":
-                    continue  # 状态已在菜单顶部显示
+                    # 状态已在菜单顶部显示，添加暂停
+                    input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
                 elif choice == "4":
                     print(f"\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                     break
                 else:
                     print(f"{Fore.RED}❌ 无效选择，请输入 1-4{Style.RESET_ALL}")
+                    input(f"{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
                     
             except KeyboardInterrupt:
                 print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
