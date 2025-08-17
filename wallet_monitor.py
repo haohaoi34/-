@@ -78,9 +78,163 @@ except ImportError as e:
     print("💡 请运行 wallet_monitor_launcher.py 来自动安装依赖")
     sys.exit(1)
 
-# 配置
-ALCHEMY_API_KEY = "MYr2ZG1P7bxc4F1qVTLIj"
+# 配置 - 无限API密钥轮询系统
+ALCHEMY_API_KEYS = [
+    "MYr2ZG1P7bxc4F1qVTLIj",   # 当前有效API密钥
+    # 🔑 在此处添加更多API密钥:
+    # "YOUR_NEW_API_KEY_1",
+    # "YOUR_NEW_API_KEY_2", 
+    # "YOUR_NEW_API_KEY_3",
+    # ... 支持无限个API密钥
+]
+CURRENT_API_KEY_INDEX = 0
+API_REQUEST_COUNT = 0  # 请求计数器，用于轮询
+REQUESTS_PER_API = 5   # 每个API密钥使用几次后切换
+
 TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+
+def get_current_api_key():
+    """获取当前API密钥"""
+    if not ALCHEMY_API_KEYS:
+        raise ValueError("❌ 没有可用的API密钥，请添加至少一个API密钥")
+    return ALCHEMY_API_KEYS[CURRENT_API_KEY_INDEX]
+
+def rotate_api_key():
+    """轮询到下一个API密钥（每N次请求自动轮换）"""
+    global CURRENT_API_KEY_INDEX, API_REQUEST_COUNT
+    
+    if len(ALCHEMY_API_KEYS) <= 1:
+        return get_current_api_key()
+    
+    API_REQUEST_COUNT += 1
+    
+    # 每REQUESTS_PER_API次请求后切换API密钥
+    if API_REQUEST_COUNT >= REQUESTS_PER_API:
+        old_index = CURRENT_API_KEY_INDEX
+        CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(ALCHEMY_API_KEYS)
+        API_REQUEST_COUNT = 0
+        
+        print(f"{Fore.CYAN}🔄 轮询切换 API#{old_index + 1} → API#{CURRENT_API_KEY_INDEX + 1} ({get_current_api_key()[:8]}...){Style.RESET_ALL}")
+    
+    return get_current_api_key()
+
+def force_switch_api_key():
+    """强制切换到下一个API密钥（故障转移时使用）"""
+    global CURRENT_API_KEY_INDEX, API_REQUEST_COUNT
+    
+    if len(ALCHEMY_API_KEYS) <= 1:
+        return get_current_api_key()
+    
+    old_index = CURRENT_API_KEY_INDEX
+    CURRENT_API_KEY_INDEX = (CURRENT_API_KEY_INDEX + 1) % len(ALCHEMY_API_KEYS)
+    API_REQUEST_COUNT = 0
+    
+    print(f"{Fore.YELLOW}🚨 故障转移 API#{old_index + 1} → API#{CURRENT_API_KEY_INDEX + 1} ({get_current_api_key()[:8]}...){Style.RESET_ALL}")
+    return get_current_api_key()
+
+def add_api_key(new_api_key: str):
+    """动态添加新的API密钥"""
+    if new_api_key and new_api_key not in ALCHEMY_API_KEYS:
+        ALCHEMY_API_KEYS.append(new_api_key)
+        print(f"{Fore.GREEN}✅ 新增API密钥: {new_api_key[:8]}... (总计: {len(ALCHEMY_API_KEYS)} 个){Style.RESET_ALL}")
+        return True
+    return False
+
+# 智能速率控制系统
+API_RATE_LIMITS = {
+    'cu_per_second': 500,           # 每秒计算单位限制
+    'monthly_cu_limit': 30000000,   # 每月3000万CU限制
+    'cu_per_request': 20,           # 估算每个请求消耗的CU
+}
+
+# 动态计算的速率控制参数
+MONTHLY_USAGE_TRACKER = {
+    'current_month': datetime.now().month,
+    'current_year': datetime.now().year,
+    'used_cu': 0,
+    'daily_target': 0,
+    'optimal_interval': 5.0,
+    'last_reset': datetime.now().isoformat()
+}
+
+def calculate_optimal_scanning_params():
+    """根据API限制和剩余时间计算最优扫描参数"""
+    import calendar
+    
+    now = datetime.now()
+    current_month = now.month
+    current_year = now.year
+    current_day = now.day
+    
+    # 获取当月总天数
+    days_in_month = calendar.monthrange(current_year, current_month)[1]
+    remaining_days = days_in_month - current_day + 1
+    
+    # 重置月度使用情况（如果是新月份）
+    if (MONTHLY_USAGE_TRACKER['current_month'] != current_month or 
+        MONTHLY_USAGE_TRACKER['current_year'] != current_year):
+        MONTHLY_USAGE_TRACKER.update({
+            'current_month': current_month,
+            'current_year': current_year,
+            'used_cu': 0,
+            'last_reset': now.isoformat()
+        })
+    
+    # 计算参数
+    total_api_keys = len(ALCHEMY_API_KEYS)
+    total_monthly_limit = API_RATE_LIMITS['monthly_cu_limit'] * total_api_keys  # 多API密钥扩容
+    remaining_cu = total_monthly_limit - MONTHLY_USAGE_TRACKER['used_cu']
+    
+    # 每日目标CU使用量
+    daily_target_cu = remaining_cu / remaining_days if remaining_days > 0 else remaining_cu
+    
+    # 每秒可用CU (考虑多API密钥)
+    cu_per_second = API_RATE_LIMITS['cu_per_second'] * total_api_keys
+    
+    # 计算最优扫描间隔
+    cu_per_request = API_RATE_LIMITS['cu_per_request']
+    max_requests_per_second = cu_per_second / cu_per_request
+    optimal_interval = 1.0 / max_requests_per_second if max_requests_per_second > 0 else 5.0
+    
+    # 确保不超过每日目标
+    max_requests_per_day = daily_target_cu / cu_per_request
+    max_requests_per_second_daily = max_requests_per_day / (24 * 3600)
+    
+    if max_requests_per_second_daily < max_requests_per_second:
+        optimal_interval = 1.0 / max_requests_per_second_daily if max_requests_per_second_daily > 0 else 30.0
+    
+    # 更新全局参数
+    MONTHLY_USAGE_TRACKER.update({
+        'daily_target': daily_target_cu,
+        'optimal_interval': max(optimal_interval, 0.1)  # 最小间隔0.1秒
+    })
+    
+    return {
+        'total_api_keys': total_api_keys,
+        'remaining_days': remaining_days,
+        'remaining_cu': remaining_cu,
+        'daily_target_cu': daily_target_cu,
+        'optimal_interval': MONTHLY_USAGE_TRACKER['optimal_interval'],
+        'max_requests_per_second': max_requests_per_second,
+        'total_monthly_limit': total_monthly_limit,
+        'current_usage_percent': (MONTHLY_USAGE_TRACKER['used_cu'] / total_monthly_limit * 100) if total_monthly_limit > 0 else 0
+    }
+
+def update_cu_usage(cu_used: int):
+    """更新CU使用量"""
+    MONTHLY_USAGE_TRACKER['used_cu'] += cu_used
+
+def get_api_keys_status():
+    """获取API密钥状态信息"""
+    rate_info = calculate_optimal_scanning_params()
+    return {
+        'total_keys': len(ALCHEMY_API_KEYS),
+        'current_index': CURRENT_API_KEY_INDEX,
+        'current_key': get_current_api_key()[:12] + "..." if ALCHEMY_API_KEYS else "无",
+        'request_count': API_REQUEST_COUNT,
+        'requests_per_api': REQUESTS_PER_API,
+        'rate_info': rate_info
+    }
 
 # 数据文件
 WALLETS_FILE = "wallets.json"
@@ -88,447 +242,526 @@ MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "config.json"
 NETWORK_STATUS_FILE = "network_status.json"
 
-# 完整的EVM/L2链条配置（纯RPC模式）
-ALCHEMY_NETWORK_CONFIG = {
-    # Ethereum
-    'ethereum': {
-        'name': 'Ethereum 主网',
-        'chain_id': 1,
-        'currency': 'ETH',
-        'rpc_url': f'https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 1
-    },
-    'ethereum_sepolia': {
-        'name': 'Ethereum Sepolia',
-        'chain_id': 11155111,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://eth-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 2
-    },
-    'ethereum_goerli': {
-        'name': 'Ethereum Goerli',
-        'chain_id': 5,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://eth-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 3
-    },
-    
-    # Polygon
-    'polygon': {
-        'name': 'Polygon 主网',
-        'chain_id': 137,
-        'currency': 'MATIC',
-
-        'rpc_url': f'https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 4
-    },
-    'polygon_mumbai': {
-        'name': 'Polygon Mumbai',
-        'chain_id': 80001,
-        'currency': 'MATIC',
-
-        'rpc_url': f'https://polygon-mumbai.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 5
-    },
-    'polygon_amoy': {
-        'name': 'Polygon Amoy',
-        'chain_id': 80002,
-        'currency': 'MATIC',
-        'sdk_network': None,
-        'rpc_url': f'https://polygon-amoy.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 6
-    },
-    
-    # Arbitrum
-    'arbitrum': {
-        'name': 'Arbitrum 主网',
-        'chain_id': 42161,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 7
-    },
-    'arbitrum_goerli': {
-        'name': 'Arbitrum Goerli',
-        'chain_id': 421613,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://arb-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 8
-    },
-    'arbitrum_sepolia': {
-        'name': 'Arbitrum Sepolia',
-        'chain_id': 421614,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://arb-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 9
-    },
-    'arbitrum_nova': {
-        'name': 'Arbitrum Nova',
-        'chain_id': 42170,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://arbnova-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 10
-    },
-    
-    # Optimism
-    'optimism': {
-        'name': 'Optimism 主网',
-        'chain_id': 10,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://opt-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 11
-    },
-    'optimism_goerli': {
-        'name': 'Optimism Goerli',
-        'chain_id': 420,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://opt-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 12
-    },
-    'optimism_kovan': {
-        'name': 'Optimism Kovan',
-        'chain_id': 69,
-        'currency': 'ETH',
-
-        'rpc_url': f'https://opt-kovan.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 13
-    },
-    'optimism_sepolia': {
-        'name': 'Optimism Sepolia',
-        'chain_id': 11155420,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://opt-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 14
-    },
-    
-    # Base
-    'base': {
-        'name': 'Base 主网',
-        'chain_id': 8453,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 15
-    },
-    'base_sepolia': {
-        'name': 'Base Sepolia',
-        'chain_id': 84532,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://base-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 16
-    },
-    
-    # Polygon zkEVM
-    'polygon_zkevm': {
-        'name': 'Polygon zkEVM',
-        'chain_id': 1101,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://polygonzkevm-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 17
-    },
-    'polygon_zkevm_testnet': {
-        'name': 'Polygon zkEVM Testnet',
-        'chain_id': 1442,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://polygonzkevm-testnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 18
-    },
-    
-    # zkSync Era
-    'zksync': {
-        'name': 'zkSync Era',
-        'chain_id': 324,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://zksync-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 19
-    },
-    'zksync_sepolia': {
-        'name': 'zkSync Sepolia',
-        'chain_id': 300,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://zksync-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 20
-    },
-    
-    # Linea
-    'linea': {
-        'name': 'Linea 主网',
-        'chain_id': 59144,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://linea-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 21
-    },
-    'linea_sepolia': {
-        'name': 'Linea Sepolia',
-        'chain_id': 59141,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://linea-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 22
-    },
-    
-    # Scroll
-    'scroll': {
-        'name': 'Scroll 主网',
-        'chain_id': 534352,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://scroll-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 23
-    },
-    'scroll_sepolia': {
-        'name': 'Scroll Sepolia',
-        'chain_id': 534351,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://scroll-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 24
-    },
-    
-    # BSC (Binance Smart Chain)
-    'bsc': {
-        'name': 'BNB Smart Chain',
-        'chain_id': 56,
-        'currency': 'BNB',
-        'sdk_network': None,
-        'rpc_url': f'https://bnb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 25
-    },
-    'bsc_testnet': {
-        'name': 'BNB Smart Chain Testnet',
-        'chain_id': 97,
-        'currency': 'BNB',
-        'sdk_network': None,
-        'rpc_url': f'https://bnb-testnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 26
-    },
-    
-    # Avalanche
-    'avalanche': {
-        'name': 'Avalanche C-Chain',
-        'chain_id': 43114,
-        'currency': 'AVAX',
-        'sdk_network': None,
-        'rpc_url': f'https://avax-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 27
-    },
-    'avalanche_fuji': {
-        'name': 'Avalanche Fuji',
-        'chain_id': 43113,
-        'currency': 'AVAX',
-        'sdk_network': None,
-        'rpc_url': f'https://avax-fuji.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 28
-    },
-    
-    # 其他重要EVM/L2链条...
-    'blast': {
-        'name': 'Blast 主网',
-        'chain_id': 81457,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://blast-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 29
-    },
-    'zetachain': {
-        'name': 'ZetaChain 主网',
-        'chain_id': 7000,
-        'currency': 'ZETA',
-        'sdk_network': None,
-        'rpc_url': f'https://zetachain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 30
-    },
-    'celo': {
-        'name': 'Celo 主网',
-        'chain_id': 42220,
-        'currency': 'CELO',
-        'sdk_network': None,
-        'rpc_url': f'https://celo-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 31
-    },
-    'astar': {
-        'name': 'Astar 主网',
-        'chain_id': 592,
-        'currency': 'ASTR',
-
-        'rpc_url': f'https://astar-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 32
-    },
-    
-    # 更多主流EVM/L2链条
-    'gnosis': {
-        'name': 'Gnosis Chain',
-        'chain_id': 100,
-        'currency': 'xDAI',
-        'sdk_network': None,
-        'rpc_url': f'https://gnosis-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 33
-    },
-    'gnosis_chiado': {
-        'name': 'Gnosis Chiado',
-        'chain_id': 10200,
-        'currency': 'xDAI',
-        'sdk_network': None,
-        'rpc_url': f'https://gnosis-chiado.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'testnet',
-        'priority': 34
-    },
-    'metis': {
-        'name': 'Metis 主网',
-        'chain_id': 1088,
-        'currency': 'METIS',
-        'sdk_network': None,
-        'rpc_url': f'https://metis-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 35
-    },
-    'soneium': {
-        'name': 'Soneium 主网',
-        'chain_id': 1946,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://soneium-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 36
-    },
-    'world_chain': {
-        'name': 'World Chain',
-        'chain_id': 480,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://worldchain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 37
-    },
-    'shape': {
-        'name': 'Shape 主网',
-        'chain_id': 360,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://shape-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 38
-    },
-    'unichain': {
-        'name': 'Unichain 主网',
-        'chain_id': 1301,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://unichain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 39
-    },
-    'apechain': {
-        'name': 'ApeChain 主网',
-        'chain_id': 33139,
-        'currency': 'APE',
-        'sdk_network': None,
-        'rpc_url': f'https://apechain-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 40
-    },
-    'abstract': {
-        'name': 'Abstract 主网',
-        'chain_id': 11124,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://abstract-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 41
-    },
-    'lumia': {
-        'name': 'Lumia 主网',
-        'chain_id': 994873017,
-        'currency': 'LUMIA',
-        'sdk_network': None,
-        'rpc_url': f'https://lumia-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 42
-    },
-    'ink': {
-        'name': 'Ink 主网',
-        'chain_id': 57073,
-        'currency': 'ETH',
-        'sdk_network': None,
-        'rpc_url': f'https://ink-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 43
-    },
-    'rootstock': {
-        'name': 'Rootstock 主网',
-        'chain_id': 30,
-        'currency': 'RBTC',
-        'sdk_network': None,
-        'rpc_url': f'https://rootstock-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 44
-    },
-    'sonic': {
-        'name': 'Sonic 主网',
-        'chain_id': 146,
-        'currency': 'S',
-        'sdk_network': None,
-        'rpc_url': f'https://sonic-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 45
-    },
-    'sei': {
-        'name': 'Sei 主网',
-        'chain_id': 1329,
-        'currency': 'SEI',
-        'sdk_network': None,
-        'rpc_url': f'https://sei-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
-        'type': 'mainnet',
-        'priority': 46
+def build_network_config(use_rotation=False):
+    """动态构建网络配置，支持API密钥轮询"""
+    api_key = rotate_api_key() if use_rotation else get_current_api_key()
+    return {
+        # ============= Layer 1 主网 =============
+        'ethereum': {
+            'name': 'Ethereum 主网',
+            'chain_id': 1,
+            'currency': 'ETH',
+            'rpc_url': f'https://eth-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 1
+        },
+        'polygon': {
+            'name': 'Polygon PoS',
+            'chain_id': 137,
+            'currency': 'MATIC',
+            'rpc_url': f'https://polygon-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 2
+        },
+        'astar': {
+            'name': 'Astar',
+            'chain_id': 592,
+            'currency': 'ASTR',
+            'rpc_url': f'https://astar-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 3
+        },
+        'celo': {
+            'name': 'Celo',
+            'chain_id': 42220,
+            'currency': 'CELO',
+            'rpc_url': f'https://celo-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 4
+        },
+        'bsc': {
+            'name': 'Binance Smart Chain',
+            'chain_id': 56,
+            'currency': 'BNB',
+            'rpc_url': f'https://bnb-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 5
+        },
+        'metis': {
+            'name': 'Metis',
+            'chain_id': 1088,
+            'currency': 'METIS',
+            'rpc_url': f'https://metis-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 6
+        },
+        'avalanche': {
+            'name': 'Avalanche C-Chain',
+            'chain_id': 43114,
+            'currency': 'AVAX',
+            'rpc_url': f'https://avax-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 7
+        },
+        'gnosis': {
+            'name': 'Gnosis',
+            'chain_id': 100,
+            'currency': 'xDAI',
+            'rpc_url': f'https://gnosis-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 8
+        },
+        'rootstock': {
+            'name': 'Rootstock',
+            'chain_id': 30,
+            'currency': 'RBTC',
+            'rpc_url': f'https://rootstock-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 9
+        },
+        
+        # ============= Layer 2 主网 =============
+        'optimism': {
+            'name': 'Optimism (OP Mainnet)',
+            'chain_id': 10,
+            'currency': 'ETH',
+            'rpc_url': f'https://opt-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 10
+        },
+        'arbitrum': {
+            'name': 'Arbitrum',
+            'chain_id': 42161,
+            'currency': 'ETH',
+            'rpc_url': f'https://arb-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 11
+        },
+        'arbitrum_nova': {
+            'name': 'Arbitrum Nova',
+            'chain_id': 42170,
+            'currency': 'ETH',
+            'rpc_url': f'https://arbnova-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 12
+        },
+        'polygon_zkevm': {
+            'name': 'Polygon zkEVM',
+            'chain_id': 1101,
+            'currency': 'ETH',
+            'rpc_url': f'https://polygonzkevm-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 13
+        },
+        'base': {
+            'name': 'Base',
+            'chain_id': 8453,
+            'currency': 'ETH',
+            'rpc_url': f'https://base-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 14
+        },
+        'zksync': {
+            'name': 'zkSync',
+            'chain_id': 324,
+            'currency': 'ETH',
+            'rpc_url': f'https://zksync-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 15
+        },
+        'linea': {
+            'name': 'Linea',
+            'chain_id': 59144,
+            'currency': 'ETH',
+            'rpc_url': f'https://linea-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 16
+        },
+        'scroll': {
+            'name': 'Scroll',
+            'chain_id': 534352,
+            'currency': 'ETH',
+            'rpc_url': f'https://scroll-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 17
+        },
+        'mantle': {
+            'name': 'Mantle',
+            'chain_id': 5000,
+            'currency': 'MNT',
+            'rpc_url': f'https://mantle-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 18
+        },
+        'opbnb': {
+            'name': 'opBNB',
+            'chain_id': 204,
+            'currency': 'BNB',
+            'rpc_url': f'https://opbnb-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 19
+        },
+        
+        # 新兴L2链条 (使用已知链ID，未知的暂时使用占位符)
+        'unichain': {
+            'name': 'Unichain',
+            'chain_id': 1301,  # 使用临时链ID，待官方确认
+            'currency': 'ETH',
+            'rpc_url': f'https://unichain-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 20
+        },
+        'berachain': {
+            'name': 'Berachain',
+            'chain_id': 80085,  # 使用临时链ID，待官方确认
+            'currency': 'BERA',
+            'rpc_url': f'https://berachain-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 21
+        },
+        'soneium': {
+            'name': 'Soneium',
+            'chain_id': 1946,  # 使用临时链ID，待官方确认
+            'currency': 'ETH',
+            'rpc_url': f'https://soneium-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 22
+        },
+        'apechain': {
+            'name': 'ApeChain',
+            'chain_id': 33139,  # 使用临时链ID，待官方确认
+            'currency': 'APE',
+            'rpc_url': f'https://apechain-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 23
+        },
+        'hyperevm': {
+            'name': 'HyperEVM',
+            'chain_id': 998,  # 使用临时链ID，待官方确认
+            'currency': 'ETH',
+            'rpc_url': f'https://hyperevm-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 24
+        },
+        
+        # ============= 新增EVM兼容链条 =============
+        'blast': {
+            'name': 'Blast',
+            'chain_id': 81457,
+            'currency': 'ETH',
+            'rpc_url': f'https://blast-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 25
+        },
+        'sonic': {
+            'name': 'Sonic',
+            'chain_id': 146,
+            'currency': 'S',
+            'rpc_url': f'https://sonic-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 26
+        },
+        'abstract': {
+            'name': 'Abstract',
+            'chain_id': 11124,
+            'currency': 'ETH',
+            'rpc_url': f'https://abstract-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 27
+        },
+        'lumia': {
+            'name': 'Lumia',
+            'chain_id': 994873017,
+            'currency': 'LUMIA',
+            'rpc_url': f'https://lumia-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 28
+        },
+        'ink': {
+            'name': 'Ink',
+            'chain_id': 57073,
+            'currency': 'ETH',
+            'rpc_url': f'https://ink-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 29
+        },
+        'story': {
+            'name': 'Story',
+            'chain_id': 1513,
+            'currency': 'IP',
+            'rpc_url': f'https://story-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 30
+        },
+        'anime': {
+            'name': 'Anime',
+            'chain_id': 11501,
+            'currency': 'ANIME',
+            'rpc_url': f'https://anime-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 31
+        },
+        'botanix': {
+            'name': 'Botanix',
+            'chain_id': 3636,
+            'currency': 'BTC',
+            'rpc_url': f'https://botanix-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 32
+        },
+        'crossfi': {
+            'name': 'CrossFi',
+            'chain_id': 4157,
+            'currency': 'XFI',
+            'rpc_url': f'https://crossfi-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 33
+        },
+        'shape': {
+            'name': 'Shape',
+            'chain_id': 360,
+            'currency': 'ETH',
+            'rpc_url': f'https://shape-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 34
+        },
+        'geist': {
+            'name': 'Geist',
+            'chain_id': 63157,
+            'currency': 'GEIST',
+            'rpc_url': f'https://geist-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 35
+        },
+        'superseed': {
+            'name': 'Superseed',
+            'chain_id': 5330,
+            'currency': 'SEED',
+            'rpc_url': f'https://superseed-mainnet.g.alchemy.com/v2/{api_key}',
+            'type': 'mainnet',
+            'priority': 36
+        },
+        
+        # ============= EVM兼容测试网 =============
+        'ethereum_sepolia': {
+            'name': 'Ethereum Sepolia',
+            'chain_id': 11155111,
+            'currency': 'ETH',
+            'rpc_url': f'https://eth-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 25
+        },
+        'ethereum_goerli': {
+            'name': 'Ethereum Goerli',
+            'chain_id': 5,
+            'currency': 'ETH',
+            'rpc_url': f'https://eth-goerli.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 26
+        },
+        'polygon_mumbai': {
+            'name': 'Polygon Mumbai',
+            'chain_id': 80001,
+            'currency': 'MATIC',
+            'rpc_url': f'https://polygon-mumbai.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 27
+        },
+        'polygon_amoy': {
+            'name': 'Polygon Amoy',
+            'chain_id': 80002,
+            'currency': 'MATIC',
+            'rpc_url': f'https://polygon-amoy.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 28
+        },
+        'optimism_sepolia': {
+            'name': 'Optimism Sepolia',
+            'chain_id': 11155420,
+            'currency': 'ETH',
+            'rpc_url': f'https://opt-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 29
+        },
+        'arbitrum_sepolia': {
+            'name': 'Arbitrum Sepolia',
+            'chain_id': 421614,
+            'currency': 'ETH',
+            'rpc_url': f'https://arb-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 30
+        },
+        'polygon_zkevm_cardona': {
+            'name': 'Polygon zkEVM Cardona',
+            'chain_id': 2442,
+            'currency': 'ETH',
+            'rpc_url': f'https://polygonzkevm-cardona.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 31
+        },
+        'base_sepolia': {
+            'name': 'Base Sepolia',
+            'chain_id': 84532,
+            'currency': 'ETH',
+            'rpc_url': f'https://base-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 32
+        },
+        'zksync_sepolia': {
+            'name': 'zkSync Sepolia',
+            'chain_id': 300,
+            'currency': 'ETH',
+            'rpc_url': f'https://zksync-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 33
+        },
+        'linea_sepolia': {
+            'name': 'Linea Sepolia',
+            'chain_id': 59141,
+            'currency': 'ETH',
+            'rpc_url': f'https://linea-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 34
+        },
+        'scroll_sepolia': {
+            'name': 'Scroll Sepolia',
+            'chain_id': 534351,
+            'currency': 'ETH',
+            'rpc_url': f'https://scroll-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 35
+        },
+        'mantle_testnet': {
+            'name': 'Mantle Testnet',
+            'chain_id': 5001,
+            'currency': 'MNT',
+            'rpc_url': f'https://mantle-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 36
+        },
+        'celo_alfajores': {
+            'name': 'Celo Alfajores',
+            'chain_id': 44787,
+            'currency': 'CELO',
+            'rpc_url': f'https://celo-alfajores.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 37
+        },
+        'gnosis_chiado': {
+            'name': 'Gnosis Chiado',
+            'chain_id': 10200,
+            'currency': 'xDAI',
+            'rpc_url': f'https://gnosis-chiado.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 38
+        },
+        'opbnb_testnet': {
+            'name': 'opBNB Testnet',
+            'chain_id': 5611,
+            'currency': 'BNB',
+            'rpc_url': f'https://opbnb-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 39
+        },
+        
+        # ============= 新增EVM兼容测试网 =============
+        'blast_sepolia': {
+            'name': 'Blast Sepolia',
+            'chain_id': 168587773,
+            'currency': 'ETH',
+            'rpc_url': f'https://blast-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 40
+        },
+        'sonic_blaze': {
+            'name': 'Sonic Blaze',
+            'chain_id': 57054,
+            'currency': 'S',
+            'rpc_url': f'https://sonic-blaze.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 41
+        },
+        'abstract_testnet': {
+            'name': 'Abstract Testnet',
+            'chain_id': 11155111,  # 使用Sepolia链ID作为测试网
+            'currency': 'ETH',
+            'rpc_url': f'https://abstract-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 42
+        },
+        'lumia_testnet': {
+            'name': 'Lumia Testnet',
+            'chain_id': 8866,
+            'currency': 'LUMIA',
+            'rpc_url': f'https://lumia-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 43
+        },
+        'ink_sepolia': {
+            'name': 'Ink Sepolia',
+            'chain_id': 763373,
+            'currency': 'ETH',
+            'rpc_url': f'https://ink-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 44
+        },
+        'story_aeneid': {
+            'name': 'Story Aeneid',
+            'chain_id': 1514,
+            'currency': 'IP',
+            'rpc_url': f'https://story-aeneid.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 45
+        },
+        'anime_testnet': {
+            'name': 'Anime Testnet',
+            'chain_id': 11502,
+            'currency': 'ANIME',
+            'rpc_url': f'https://anime-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 46
+        },
+        'botanix_testnet': {
+            'name': 'Botanix Testnet',
+            'chain_id': 3637,
+            'currency': 'BTC',
+            'rpc_url': f'https://botanix-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 47
+        },
+        'crossfi_testnet': {
+            'name': 'CrossFi Testnet',
+            'chain_id': 4158,
+            'currency': 'XFI',
+            'rpc_url': f'https://crossfi-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 48
+        },
+        'shape_sepolia': {
+            'name': 'Shape Sepolia',
+            'chain_id': 11011,
+            'currency': 'ETH',
+            'rpc_url': f'https://shape-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 49
+        },
+        'geist_testnet': {
+            'name': 'Geist Testnet',
+            'chain_id': 63158,
+            'currency': 'GEIST',
+            'rpc_url': f'https://geist-testnet.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 50
+        },
+        'superseed_sepolia': {
+            'name': 'Superseed Sepolia',
+            'chain_id': 5331,
+            'currency': 'SEED',
+            'rpc_url': f'https://superseed-sepolia.g.alchemy.com/v2/{api_key}',
+            'type': 'testnet',
+            'priority': 51
+        }
     }
-}
 
 def build_supported_networks():
     """构建纯RPC网络系统"""
@@ -538,8 +771,11 @@ def build_supported_networks():
     testnets: List[str] = []
     network_priority: Dict[str, int] = {}
     
+    # 获取当前网络配置
+    network_config = build_network_config()
+    
     # 处理所有配置的网络（纯RPC模式）
-    for network_key, config in ALCHEMY_NETWORK_CONFIG.items():
+    for network_key, config in network_config.items():
         # 所有网络都使用RPC模式
         supported_networks[network_key] = {
             'mode': 'rpc',
@@ -555,6 +791,11 @@ def build_supported_networks():
             testnets.append(network_key)
     
     return supported_networks, network_names, mainnets, testnets, network_priority
+
+def refresh_network_config():
+    """刷新网络配置（API密钥切换后调用）"""
+    global SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY
+    SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY = build_supported_networks()
 
 # 构建支持的网络配置
 SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY = build_supported_networks()
@@ -587,94 +828,119 @@ class WalletMonitor:
         self.load_network_status()
         
     def initialize_clients(self):
-        """并发初始化所有网络客户端 - 纯RPC模式"""
-        print(f"\n{Fore.CYAN}🔧 并发初始化 {len(SUPPORTED_NETWORKS)} 个RPC网络客户端...{Style.RESET_ALL}")
+        """智能初始化网络客户端 - 轮询API密钥模式"""
+        print(f"\n{Fore.CYAN}🔧 智能初始化网络客户端...{Style.RESET_ALL}")
+        status = get_api_keys_status()
+        print(f"{Fore.CYAN}🔑 API密钥轮询系统: {status['total_keys']} 个密钥，每{status['requests_per_api']}次请求轮换{Style.RESET_ALL}")
         
         def init_single_client(network_item):
             network_key, network_info = network_item
+            
+            # 对每个网络使用轮询的API密钥
             try:
-                config = network_info['config']
+                # 使用轮询获取网络配置
+                network_config = build_network_config(use_rotation=True)
+                config = network_config.get(network_key)
+                if not config:
+                    return network_key, None, False, "网络配置不存在", CURRENT_API_KEY_INDEX
                 
-                # 添加小延迟避免API限制
-                import time
-                time.sleep(0.1)
+                # 智能延迟 - 基于API限制动态调整
+                rate_info = calculate_optimal_scanning_params()
+                smart_delay = max(0.1, rate_info['optimal_interval'])
+                time.sleep(smart_delay)
                 
-                # 纯RPC模式
-                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 10}))
+                # 创建Web3连接
+                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 15}))
+                
                 # 测试连接
                 block_number = web3.eth.get_block_number()
-                return network_key, web3, True, None
+                return network_key, web3, True, None, CURRENT_API_KEY_INDEX
                     
             except Exception as e:
-                return network_key, None, False, str(e)
-        
-        # 使用线程池并发初始化（降低并发数避免API限制）
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # 按优先级排序，只初始化前20个网络避免API限制
-            sorted_networks = sorted(SUPPORTED_NETWORKS.items(), 
-                                   key=lambda x: NETWORK_PRIORITY.get(x[0], 999))
-            
-            # 只初始化前20个网络，避免API限制
-            priority_networks = sorted_networks[:20]
-            futures = [executor.submit(init_single_client, item) for item in priority_networks]
-            
-            success_count = 0
-            mainnet_count = 0
-            testnet_count = 0
-            
-            for future in concurrent.futures.as_completed(futures):
-                network_key, client, success, error = future.result()
+                error_msg = str(e)
                 
-                if success:
-                    # 存储RPC客户端
-                    self.web3_clients[network_key] = client
-                    
-                    self.network_status[network_key] = NetworkStatus(
-                        available=True,
-                        last_check=datetime.now().isoformat(),
-                        error_count=0,
-                        last_error=""
-                    )
-                    
-                    # 分类统计
-                    if network_key in MAINNET_NETWORKS:
-                        mainnet_count += 1
-                        print(f"{Fore.GREEN}🌐 {NETWORK_NAMES[network_key]} (主网-RPC){Style.RESET_ALL}")
+                # 检查是否是API密钥相关错误
+                if "403" in error_msg or "401" in error_msg or "Invalid API key" in error_msg or "429" in error_msg:
+                    # 强制切换API密钥
+                    if len(ALCHEMY_API_KEYS) > 1:
+                        old_key_index = CURRENT_API_KEY_INDEX
+                        force_switch_api_key()
+                        print(f"{Fore.YELLOW}🚨 API#{old_key_index + 1}遇到限制，强制切换到API#{CURRENT_API_KEY_INDEX + 1} - {NETWORK_NAMES.get(network_key, network_key)}{Style.RESET_ALL}")
+                        return network_key, None, False, f"API限制，已切换密钥", CURRENT_API_KEY_INDEX
                     else:
-                        testnet_count += 1
-                        print(f"{Fore.CYAN}🌐 {NETWORK_NAMES[network_key]} (测试网-RPC){Style.RESET_ALL}")
-                    
-                    success_count += 1
+                        return network_key, None, False, f"API密钥失效: {error_msg}", CURRENT_API_KEY_INDEX
                 else:
-                    self.network_status[network_key] = NetworkStatus(
-                        available=False,
-                        last_check=datetime.now().isoformat(),
-                        error_count=1,
-                        last_error=error
-                    )
-                    print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} (RPC) - {error[:50]}...{Style.RESET_ALL}")
+                    # 非API密钥问题
+                    return network_key, None, False, error_msg, CURRENT_API_KEY_INDEX
+        
+        # 只初始化最重要的5个网络，避免API限制
+        priority_networks = sorted(SUPPORTED_NETWORKS.items(), 
+                                 key=lambda x: NETWORK_PRIORITY.get(x[0], 999))[:5]
+        
+        success_count = 0
+        mainnet_count = 0
+        testnet_count = 0
+        
+        print(f"{Fore.CYAN}📡 初始化 {len(priority_networks)} 个核心网络 (轮询API密钥)...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}💡 其他{len(SUPPORTED_NETWORKS) - 5}个网络将按需加载{Style.RESET_ALL}")
+        
+        # 串行初始化，避免API限制
+        for i, (network_key, network_info) in enumerate(priority_networks, 1):
+            print(f"{Fore.CYAN}[{i}/{len(priority_networks)}] 初始化 {NETWORK_NAMES.get(network_key, network_key)}...{Style.RESET_ALL}")
+            
+            result = init_single_client((network_key, network_info))
+            network_key, client, success, error, used_key_index = result
+            
+            if success:
+                self.web3_clients[network_key] = client
+                
+                self.network_status[network_key] = NetworkStatus(
+                    available=True,
+                    last_check=datetime.now().isoformat(),
+                    error_count=0,
+                    last_error=""
+                )
+                
+                if network_key in MAINNET_NETWORKS:
+                    mainnet_count += 1
+                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (主网-API#{used_key_index + 1}){Style.RESET_ALL}")
+                else:
+                    testnet_count += 1
+                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (测试网-API#{used_key_index + 1}){Style.RESET_ALL}")
+                
+                success_count += 1
+            else:
+                self.network_status[network_key] = NetworkStatus(
+                    available=False,
+                    last_check=datetime.now().isoformat(),
+                    error_count=1,
+                    last_error=error
+                )
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {error[:40]}...{Style.RESET_ALL}")
         
         self.save_network_status()
         
-        print(f"\n{Fore.GREEN}🎉 RPC网络系统初始化完成!{Style.RESET_ALL}")
-        print(f"  📊 总计: {success_count}/20 个优先网络可用 (避免API限制)")
+        print(f"\n{Fore.GREEN}🎉 网络初始化完成!{Style.RESET_ALL}")
+        print(f"  📊 可用网络: {success_count}/5 个核心网络")
         print(f"  🌐 主网: {mainnet_count} 个")
         print(f"  🧪 测试网: {testnet_count} 个")
-        print(f"  🌐 RPC模式: {success_count} 个")
-        print(f"  💡 其他网络将在需要时动态加载")
+        print(f"  🔑 当前API密钥: #{CURRENT_API_KEY_INDEX + 1}/{len(ALCHEMY_API_KEYS)}")
+        print(f"  🔄 轮询状态: {API_REQUEST_COUNT}/{REQUESTS_PER_API} 次")
+        print(f"  💡 其他{len(SUPPORTED_NETWORKS) - 5}个网络将按需加载 (共{len(SUPPORTED_NETWORKS)}个)")
     
     def load_network_on_demand(self, network_key: str) -> bool:
-        """按需加载网络客户端"""
+        """按需加载网络客户端 - 轮询API密钥"""
         if network_key in self.web3_clients:
             return True
-            
+        
         try:
-            network_info = SUPPORTED_NETWORKS.get(network_key)
-            if not network_info:
+            # 使用轮询获取网络配置
+            network_config = build_network_config(use_rotation=True)
+            config = network_config.get(network_key)
+            if not config:
                 return False
-                
-            config = network_info['config']
-            web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 10}))
+            
+            web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 15}))
             
             # 测试连接
             web3.eth.get_block_number()
@@ -690,17 +956,26 @@ class WalletMonitor:
                 last_error=""
             )
             
-            print(f"{Fore.GREEN}🔗 动态加载 {NETWORK_NAMES[network_key]} 成功{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}🔗 动态加载 {NETWORK_NAMES[network_key]} 成功 (API#{CURRENT_API_KEY_INDEX + 1}){Style.RESET_ALL}")
             return True
             
         except Exception as e:
+            error_msg = str(e)
+            
+            # 如果遇到API问题，强制切换密钥
+            if ("403" in error_msg or "401" in error_msg or "Invalid API key" in error_msg or "429" in error_msg) and len(ALCHEMY_API_KEYS) > 1:
+                old_key_index = CURRENT_API_KEY_INDEX
+                force_switch_api_key()
+                print(f"{Fore.YELLOW}🚨 动态加载时API#{old_key_index + 1}失效，已切换到API#{CURRENT_API_KEY_INDEX + 1}{Style.RESET_ALL}")
+            
+            # 记录错误状态
             self.network_status[network_key] = NetworkStatus(
                 available=False,
                 last_check=datetime.now().isoformat(),
                 error_count=1,
-                last_error=str(e)
+                last_error=error_msg
             )
-            print(f"{Fore.YELLOW}⚠️ 动态加载 {NETWORK_NAMES[network_key]} 失败: {str(e)[:30]}...{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}⚠️ 动态加载 {NETWORK_NAMES[network_key]} 失败: {error_msg[:30]}...{Style.RESET_ALL}")
             return False
     
     def load_network_status(self):
@@ -972,11 +1247,14 @@ class WalletMonitor:
             
             # 检查账户余额
             balance = await loop.run_in_executor(None, web3.eth.get_balance, address)
+            update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
+            
             if balance > 0:
                 return True
             
             # 检查交易计数
             nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, address)
+            update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
             return nonce > 0
             
         except Exception as e:
@@ -1008,6 +1286,7 @@ class WalletMonitor:
                 # 在事件循环中运行同步的web3调用
                 loop = asyncio.get_event_loop()
                 balance_wei = await loop.run_in_executor(None, web3.eth.get_balance, address)
+                update_cu_usage(API_RATE_LIMITS['cu_per_request'])  # 跟踪CU使用
                 balance_eth = Web3.from_wei(balance_wei, 'ether')
                 return float(balance_eth)
                 
@@ -1224,8 +1503,21 @@ class WalletMonitor:
                 except Exception as e:
                     continue
             
-            # 智能等待间隔
-            await asyncio.sleep(30)  # 30秒检查一次
+            # 智能等待间隔 - 基于API限制动态调整
+            rate_info = calculate_optimal_scanning_params()
+            optimal_interval = rate_info['optimal_interval']
+            
+            # 根据网络数量和钱包数量调整间隔
+            total_operations = len(active_networks) * len(self.wallets)
+            adjusted_interval = optimal_interval * total_operations
+            
+            # 确保合理的间隔范围 (5-300秒)
+            final_interval = max(5.0, min(300.0, adjusted_interval))
+            
+            print(f"{Fore.CYAN}⏱️ 下次扫描间隔: {final_interval:.1f}秒 (基于API限制优化){Style.RESET_ALL}")
+            print(f"{Fore.CYAN}📊 剩余{rate_info['remaining_days']}天，可用额度: {rate_info['remaining_cu']:,.0f} CU{Style.RESET_ALL}")
+            
+            await asyncio.sleep(final_interval)
     
     async def start_monitoring(self):
         """开始监控所有钱包 - 完全优化版本"""
@@ -1237,6 +1529,14 @@ class WalletMonitor:
         print(f"{Fore.CYAN}📊 监控钱包: {len(self.wallets)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🎯 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
+        
+        # 显示速率控制信息
+        rate_info = calculate_optimal_scanning_params()
+        print(f"\n{Fore.YELLOW}⚡ 智能速率控制已启用:{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📊 月度额度: {rate_info['total_monthly_limit']:,} CU ({rate_info['total_api_keys']} API密钥){Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📅 剩余天数: {rate_info['remaining_days']} 天{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}🎯 每日目标: {rate_info['daily_target_cu']:,.0f} CU{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}⏱️ 扫描间隔: {rate_info['optimal_interval']:.1f} 秒{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}💡 按 Ctrl+C 停止监控{Style.RESET_ALL}")
         
         self.monitoring_active = True
@@ -1304,10 +1604,13 @@ class WalletMonitor:
         print("  ✓ 网络状态缓存和持久化")
         
         print(f"\n{Fore.CYAN}🔧 监控策略:{Style.RESET_ALL}")
+        rate_info = calculate_optimal_scanning_params()
         print("  • 优先检查主网 (价值更高)")
-        print("  • 30秒检查间隔 (平衡速度和API限制)")
+        print(f"  • {rate_info['optimal_interval']:.1f}秒智能间隔 (基于API限制优化)")
         print("  • 最多2个钱包并发监控")
         print("  • 自动重试失败的网络")
+        print(f"  • 智能速率控制: {rate_info['max_requests_per_second']:.1f} 请求/秒")
+        print(f"  • 月度额度管理: {rate_info['remaining_days']}天剩余")
         
         print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
         confirm = input(f"{Fore.CYAN}确认启动智能监控系统? (y/N): {Style.RESET_ALL}")
@@ -1362,6 +1665,10 @@ class WalletMonitor:
         
         print(f"📋 转账: {transfer_count} 笔 (总计: {total_amount:.6f} ETH)")
         print(f"🎯 目标: {TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}")
+        status = get_api_keys_status()
+        rate_info = status['rate_info']
+        print(f"🔑 API轮询: #{status['current_index'] + 1}/{status['total_keys']} ({status['current_key']}) [{status['request_count']}/{status['requests_per_api']}]")
+        print(f"⚡ 速率控制: {rate_info['remaining_days']}天剩余 | {rate_info['current_usage_percent']:.1f}%已用 | 间隔{rate_info['optimal_interval']:.1f}s")
     
     def show_detailed_status(self):
         """显示详细状态 - 完整诊断版本"""
@@ -1459,10 +1766,38 @@ class WalletMonitor:
         else:
             print("  📭 暂无转账记录")
         
+        # API密钥轮询状态
+        print(f"\n{Fore.YELLOW}🔑 API密钥轮询系统:{Style.RESET_ALL}")
+        status = get_api_keys_status()
+        rate_info = status['rate_info']
+        print(f"  📊 总密钥数: {status['total_keys']} 个")
+        print(f"  🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
+        print(f"  🔄 轮询计数: {status['request_count']}/{status['requests_per_api']} 次")
+        print(f"  ⚡ 轮询策略: 每{status['requests_per_api']}次请求自动切换")
+        
+        # 速率控制详情
+        print(f"\n{Fore.CYAN}⚡ 智能速率控制:{Style.RESET_ALL}")
+        print(f"  📊 月度限制: {rate_info['total_monthly_limit']:,} CU ({status['total_keys']} API × 3000万)")
+        print(f"  📈 已用额度: {MONTHLY_USAGE_TRACKER['used_cu']:,} CU ({rate_info['current_usage_percent']:.1f}%)")
+        print(f"  📅 剩余天数: {rate_info['remaining_days']} 天")
+        print(f"  🎯 每日目标: {rate_info['daily_target_cu']:,.0f} CU")
+        print(f"  ⏱️ 最优间隔: {rate_info['optimal_interval']:.2f} 秒")
+        print(f"  🚀 最大速率: {rate_info['max_requests_per_second']:.1f} 请求/秒")
+        
+        print(f"\n  📋 API密钥列表:")
+        for i, key in enumerate(ALCHEMY_API_KEYS):
+            status_icon = "🟢" if i == CURRENT_API_KEY_INDEX else "⚪"
+            usage_info = f"[{API_REQUEST_COUNT}/{REQUESTS_PER_API}]" if i == CURRENT_API_KEY_INDEX else "[待用]"
+            print(f"    {status_icon} API#{i + 1}: {key[:12]}... {usage_info}")
+        
+        if len(ALCHEMY_API_KEYS) < 5:
+            print(f"\n  {Fore.CYAN}💡 添加更多API密钥位置:{Style.RESET_ALL}")
+            for j in range(len(ALCHEMY_API_KEYS), min(len(ALCHEMY_API_KEYS) + 3, 10)):
+                print(f"    ➕ API#{j + 1}: [可添加新密钥] → 扩容+3000万CU/月")
+        
         # 系统配置详情
         print(f"\n{Fore.YELLOW}⚙️ 系统配置详情:{Style.RESET_ALL}")
         print(f"  🎯 目标地址: {TARGET_ADDRESS}")
-        print(f"  🔑 API密钥: {ALCHEMY_API_KEY[:20]}...")
         print(f"  🔄 监控状态: {'🟢 运行中' if self.monitoring_active else '🔴 已停止'}")
         print(f"  ⚡ 检查间隔: 30秒")
         print(f"  🔀 并发限制: 最多2个钱包，3个网络并发")
@@ -1496,9 +1831,35 @@ class WalletMonitor:
         print("  • 错误智能分类: 区分API限制、网络问题、配置错误")
         print("  • 并发限制控制: 避免触发API速率限制")
         
+        print(f"\n{Fore.CYAN}🔑 API密钥轮询系统:{Style.RESET_ALL}")
+        status = get_api_keys_status()
+        print(f"  • 🔄 智能轮询: 每{status['requests_per_api']}次请求自动切换API密钥")
+        print(f"  • 📊 当前配置: {status['total_keys']} 个API密钥")
+        print(f"  • 🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
+        print(f"  • 🚨 故障转移: API失效时立即切换")
+        print(f"  • ➕ 扩展支持: 支持无限个API密钥")
+        print(f"  • 💡 添加方法: 在代码ALCHEMY_API_KEYS列表中添加新密钥")
+        
+        print(f"\n{Fore.YELLOW}⚡ 智能速率控制系统:{Style.RESET_ALL}")
+        rate_info = status['rate_info']
+        print(f"  • 📊 API限制: 500 CU/秒，3000万 CU/月 (每个API)")
+        print(f"  • 🔄 智能扩容: {rate_info['total_api_keys']} API = {rate_info['total_monthly_limit']:,} CU/月")
+        print(f"  • ⏱️ 动态间隔: {rate_info['optimal_interval']:.2f} 秒 (基于剩余额度)")
+        print(f"  • 📅 时间管理: {rate_info['remaining_days']} 天剩余，每日{rate_info['daily_target_cu']:,.0f} CU")
+        print(f"  • 🎯 当前使用: {rate_info['current_usage_percent']:.1f}% ({MONTHLY_USAGE_TRACKER['used_cu']:,} CU)")
+        print(f"  • 🚀 最大速率: {rate_info['max_requests_per_second']:.1f} 请求/秒")
+        print("  • 📊 重置功能: API管理菜单可重置月度统计")
+        
         print(f"\n{Fore.GREEN}🌐 支持的网络 (共{len(SUPPORTED_NETWORKS)}个):{Style.RESET_ALL}")
-        print(f"\n  {Fore.CYAN}🔷 主网 ({len(MAINNET_NETWORKS)}个):{Style.RESET_ALL}")
-        for net in MAINNET_NETWORKS:
+        print(f"\n  {Fore.CYAN}🔷 Layer 1 主网 ({len([n for n in MAINNET_NETWORKS if n in ['ethereum', 'polygon', 'astar', 'celo', 'bsc', 'metis', 'avalanche', 'gnosis', 'rootstock']])}个):{Style.RESET_ALL}")
+        layer1_nets = ['ethereum', 'polygon', 'astar', 'celo', 'bsc', 'metis', 'avalanche', 'gnosis', 'rootstock']
+        for net in layer1_nets:
+            if net in NETWORK_NAMES:
+                print(f"    • {NETWORK_NAMES[net]}")
+        
+        print(f"\n  {Fore.MAGENTA}🔷 Layer 2 主网 ({len([n for n in MAINNET_NETWORKS if n not in layer1_nets])}个):{Style.RESET_ALL}")
+        layer2_nets = [n for n in MAINNET_NETWORKS if n not in layer1_nets]
+        for net in layer2_nets:
             print(f"    • {NETWORK_NAMES[net]}")
         
         print(f"\n  {Fore.YELLOW}🧪 测试网 ({len(TESTNET_NETWORKS)}个):{Style.RESET_ALL}")
@@ -1510,9 +1871,10 @@ class WalletMonitor:
         print("  • 监控过程需要稳定的网络连接")
         print("  • 建议在VPS或云服务器上24小时运行")
         print("  • 定期备份wallets.json和monitoring_log.json")
+        print("  • API密钥会自动轮换使用")
         
         print(f"\n{Fore.YELLOW}🔧 故障排除指南:{Style.RESET_ALL}")
-        print("  • API错误403: 检查API密钥是否有效")
+        print("  • API错误403: 系统会自动切换到备用API密钥")
         print("  • 网络连接失败: 检查服务器网络连接")
         print("  • 导入失败: 确认私钥格式为64位十六进制")
         print("  • 监控卡死: 重启程序，系统会自动恢复状态")
@@ -1522,6 +1884,211 @@ class WalletMonitor:
         print("  • 系统会自动保存所有状态和日志")
         print("  • 重启后会自动恢复钱包和网络配置")
         print("  • 所有操作都有详细的日志记录")
+        print("  • 双API密钥确保高可用性")
+    
+    def api_key_management_menu(self):
+        """API密钥管理菜单"""
+        while True:
+            os.system('clear' if os.name == 'posix' else 'cls')
+            
+            print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔑 API密钥轮询管理系统{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
+            
+            status = get_api_keys_status()
+            
+            print(f"\n{Fore.YELLOW}📊 当前状态:{Style.RESET_ALL}")
+            print(f"  📊 总密钥数: {status['total_keys']} 个")
+            print(f"  🎯 当前使用: #{status['current_index'] + 1} ({status['current_key']})")
+            print(f"  🔄 轮询计数: {status['request_count']}/{status['requests_per_api']} 次")
+            print(f"  ⚡ 轮询策略: 每{status['requests_per_api']}次请求自动切换")
+            
+            print(f"\n{Fore.CYAN}📋 API密钥列表:{Style.RESET_ALL}")
+            for i, key in enumerate(ALCHEMY_API_KEYS):
+                status_icon = "🟢" if i == CURRENT_API_KEY_INDEX else "⚪"
+                usage_info = f"[使用中 {API_REQUEST_COUNT}/{REQUESTS_PER_API}]" if i == CURRENT_API_KEY_INDEX else "[待轮询]"
+                print(f"  {status_icon} API#{i + 1}: {key[:20]}... {usage_info}")
+            
+            # 显示可添加的位置
+            print(f"\n{Fore.GREEN}➕ 可添加API密钥位置:{Style.RESET_ALL}")
+            for j in range(len(ALCHEMY_API_KEYS), len(ALCHEMY_API_KEYS) + 3):
+                print(f"  ➕ API#{j + 1}: [空位，可添加新密钥]")
+            
+            # 显示速率控制信息
+            print(f"\n{Fore.YELLOW}⚡ 速率控制状态:{Style.RESET_ALL}")
+            rate_info = status['rate_info']
+            print(f"  📊 月度限制: {rate_info['total_monthly_limit']:,} CU")
+            print(f"  📈 已用: {MONTHLY_USAGE_TRACKER['used_cu']:,} CU ({rate_info['current_usage_percent']:.1f}%)")
+            print(f"  📅 剩余: {rate_info['remaining_days']} 天")
+            print(f"  ⏱️ 最优间隔: {rate_info['optimal_interval']:.2f} 秒")
+            
+            print(f"\n{Fore.YELLOW}🔧 管理功能:{Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}1.{Style.RESET_ALL} ➕ 添加新API密钥 (扩容+3000万CU/月)")
+            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🔄 手动切换API密钥")
+            print(f"  {Fore.CYAN}3.{Style.RESET_ALL} ⚙️ 设置轮询频率")
+            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 📊 重置月度使用统计")
+            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🧪 测试所有API密钥")
+            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 🔙 返回主菜单")
+            
+            print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+            
+            try:
+                choice = input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}").strip()
+                
+                if choice == "1":
+                    self.add_new_api_key()
+                elif choice == "2":
+                    self.manual_switch_api_key()
+                elif choice == "3":
+                    self.set_rotation_frequency()
+                elif choice == "4":
+                    self.reset_monthly_usage()
+                elif choice == "5":
+                    self.test_all_api_keys()
+                elif choice == "6":
+                    break
+                else:
+                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-6{Style.RESET_ALL}")
+                    time.sleep(2)
+                    
+            except KeyboardInterrupt:
+                break
+    
+    def add_new_api_key(self):
+        """添加新API密钥"""
+        print(f"\n{Fore.CYAN}➕ 添加新API密钥{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}💡 请输入新的Alchemy API密钥{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}格式示例: abcd1234efgh5678ijkl9012mnop3456{Style.RESET_ALL}")
+        
+        new_key = input(f"\n{Fore.CYAN}新API密钥: {Style.RESET_ALL}").strip()
+        
+        if not new_key:
+            print(f"{Fore.RED}❌ API密钥不能为空{Style.RESET_ALL}")
+        elif len(new_key) < 20:
+            print(f"{Fore.RED}❌ API密钥长度不足，请输入完整密钥{Style.RESET_ALL}")
+        elif new_key in ALCHEMY_API_KEYS:
+            print(f"{Fore.YELLOW}⚠️ 该API密钥已存在{Style.RESET_ALL}")
+        else:
+            if add_api_key(new_key):
+                # 刷新网络配置
+                refresh_network_config()
+                print(f"{Fore.GREEN}🎉 API密钥添加成功！{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}💡 系统现在支持 {len(ALCHEMY_API_KEYS)} 个API密钥轮询{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}❌ 添加失败{Style.RESET_ALL}")
+        
+        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def manual_switch_api_key(self):
+        """手动切换API密钥"""
+        if len(ALCHEMY_API_KEYS) <= 1:
+            print(f"\n{Fore.YELLOW}⚠️ 只有一个API密钥，无法切换{Style.RESET_ALL}")
+            input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+            return
+        
+        old_key = get_current_api_key()
+        force_switch_api_key()
+        new_key = get_current_api_key()
+        
+        print(f"\n{Fore.GREEN}🔄 API密钥已切换{Style.RESET_ALL}")
+        print(f"  旧密钥: {old_key[:12]}...")
+        print(f"  新密钥: {new_key[:12]}...")
+        print(f"  当前位置: #{CURRENT_API_KEY_INDEX + 1}/{len(ALCHEMY_API_KEYS)}")
+        
+        # 刷新网络配置
+        refresh_network_config()
+        
+        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def set_rotation_frequency(self):
+        """设置轮询频率"""
+        global REQUESTS_PER_API
+        
+        print(f"\n{Fore.CYAN}⚙️ 设置API密钥轮询频率{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}当前频率: 每 {REQUESTS_PER_API} 次请求切换一次API密钥{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}建议范围: 3-10 次（过低可能触发限制，过高可能不够均匀）{Style.RESET_ALL}")
+        
+        try:
+            new_freq = input(f"\n{Fore.CYAN}新轮询频率 (回车保持当前): {Style.RESET_ALL}").strip()
+            
+            if new_freq:
+                freq = int(new_freq)
+                if 1 <= freq <= 50:
+                    REQUESTS_PER_API = freq
+                    print(f"{Fore.GREEN}✅ 轮询频率已设置为: 每 {REQUESTS_PER_API} 次请求切换{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}❌ 频率必须在 1-50 之间{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.CYAN}💡 保持当前频率: {REQUESTS_PER_API}{Style.RESET_ALL}")
+                
+        except ValueError:
+            print(f"{Fore.RED}❌ 请输入有效数字{Style.RESET_ALL}")
+        
+        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def test_all_api_keys(self):
+        """测试所有API密钥"""
+        print(f"\n{Fore.CYAN}🧪 测试所有API密钥...{Style.RESET_ALL}")
+        
+        for i, api_key in enumerate(ALCHEMY_API_KEYS):
+            print(f"\n{Fore.CYAN}[{i + 1}/{len(ALCHEMY_API_KEYS)}] 测试 API#{i + 1}: {api_key[:12]}...{Style.RESET_ALL}")
+            
+            try:
+                # 使用Ethereum主网测试
+                test_url = f'https://eth-mainnet.g.alchemy.com/v2/{api_key}'
+                web3 = Web3(Web3.HTTPProvider(test_url, request_kwargs={'timeout': 10}))
+                
+                # 测试基本连接
+                block_number = web3.eth.get_block_number()
+                print(f"  ✅ 连接成功 - 当前区块: {block_number}")
+                
+                # 测试余额查询
+                balance = web3.eth.get_balance("0x0000000000000000000000000000000000000000")
+                print(f"  ✅ 余额查询成功")
+                
+                print(f"  {Fore.GREEN}🎉 API#{i + 1} 测试通过{Style.RESET_ALL}")
+                
+            except Exception as e:
+                error_msg = str(e)
+                if "403" in error_msg or "401" in error_msg:
+                    print(f"  {Fore.RED}❌ API#{i + 1} 认证失败 (403/401){Style.RESET_ALL}")
+                elif "429" in error_msg:
+                    print(f"  {Fore.YELLOW}⚠️ API#{i + 1} 速率限制 (429){Style.RESET_ALL}")
+                else:
+                    print(f"  {Fore.RED}❌ API#{i + 1} 测试失败: {error_msg[:40]}...{Style.RESET_ALL}")
+            
+            time.sleep(0.5)  # 避免连续测试触发限制
+        
+        print(f"\n{Fore.GREEN}🎉 所有API密钥测试完成{Style.RESET_ALL}")
+        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def reset_monthly_usage(self):
+        """重置月度使用统计"""
+        print(f"\n{Fore.YELLOW}📊 重置月度使用统计{Style.RESET_ALL}")
+        
+        current_usage = MONTHLY_USAGE_TRACKER['used_cu']
+        rate_info = calculate_optimal_scanning_params()
+        
+        print(f"当前已用: {current_usage:,} CU ({rate_info['current_usage_percent']:.1f}%)")
+        print(f"月度限制: {rate_info['total_monthly_limit']:,} CU")
+        print(f"剩余天数: {rate_info['remaining_days']} 天")
+        
+        confirm = input(f"\n{Fore.YELLOW}确认重置月度使用统计? (y/N): {Style.RESET_ALL}").strip().lower()
+        
+        if confirm in ['y', 'yes']:
+            MONTHLY_USAGE_TRACKER['used_cu'] = 0
+            MONTHLY_USAGE_TRACKER['last_reset'] = datetime.now().isoformat()
+            print(f"{Fore.GREEN}✅ 月度使用统计已重置{Style.RESET_ALL}")
+            
+            # 重新计算最优参数
+            new_rate_info = calculate_optimal_scanning_params()
+            print(f"{Fore.CYAN}📊 新的每日目标: {new_rate_info['daily_target_cu']:,.0f} CU{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}⏱️ 新的最优间隔: {new_rate_info['optimal_interval']:.2f} 秒{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}🚀 最大速率: {new_rate_info['max_requests_per_second']:.1f} 请求/秒{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.CYAN}取消重置{Style.RESET_ALL}")
+        
+        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def main_menu(self):
         """主菜单 - 完全优化的交互体验"""
@@ -1530,8 +2097,8 @@ class WalletMonitor:
             os.system('clear' if os.name == 'posix' else 'cls')
             
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络支持版{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 纯RPC模式 | 智能并发优化 | 人性化交互{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络版{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 无限API密钥轮询 | 智能优化{Style.RESET_ALL}")
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
             
             self.show_status()
@@ -1540,13 +2107,14 @@ class WalletMonitor:
             print(f"  {Fore.CYAN}1.{Style.RESET_ALL} 📥 导入私钥    {Fore.GREEN}(智能批量识别，支持任意格式){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(并发优化，3倍速度提升){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 🔑 API密钥管理 {Fore.GREEN}(轮询系统，无限扩展){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = input(f"{Fore.CYAN}请选择功能 (1-5): {Style.RESET_ALL}").strip()
+                choice = input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}").strip()
                 
                 if choice == "1":
                     self.import_private_keys_menu()
@@ -1556,16 +2124,18 @@ class WalletMonitor:
                     self.show_detailed_status()
                     input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
                 elif choice == "4":
+                    self.api_key_management_menu()
+                elif choice == "5":
                     self.show_help_menu()
                     input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
-                elif choice == "5":
+                elif choice == "6":
                     print(f"\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}💾 所有数据已自动保存{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}🔄 下次启动会自动恢复所有配置{Style.RESET_ALL}")
                     break
                 else:
-                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-5{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4 或 5){Style.RESET_ALL}")
+                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-6{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5 或 6){Style.RESET_ALL}")
                     time.sleep(3)  # 给用户时间看到提示
                     
             except KeyboardInterrupt:
