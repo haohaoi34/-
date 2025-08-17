@@ -224,6 +224,20 @@ def update_cu_usage(cu_used: int):
     """更新CU使用量"""
     MONTHLY_USAGE_TRACKER['used_cu'] += cu_used
 
+def enhanced_safe_input(prompt: str, default: str = "") -> str:
+    """安全的输入函数，处理EOF和其他异常"""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        print(f"\n{Fore.YELLOW}⚠️ 输入中断，使用默认值{Style.RESET_ALL}")
+        return default
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}⚠️ 用户中断{Style.RESET_ALL}")
+        return default
+    except Exception as e:
+        print(f"\n{Fore.RED}❌ 输入错误: {e}{Style.RESET_ALL}")
+        return default
+
 def get_api_keys_status():
     """获取API密钥状态信息"""
     rate_info = calculate_optimal_scanning_params()
@@ -1091,15 +1105,19 @@ class WalletMonitor:
         
         while True:
             try:
-                line = input()
+                line = enhanced_safe_input("", "")
+                
+                # 检查退出命令
                 if line.strip().lower() in ['q', 'quit', 'exit']:
                     print(f"\n{Fore.YELLOW}🔙 返回主菜单{Style.RESET_ALL}")
                     time.sleep(1)
                     return
                 
+                # 处理空行
                 if line.strip() == "":
                     empty_line_count += 1
                     if empty_line_count >= 2:
+                        print(f"\n{Fore.GREEN}✅ 检测到双击回车，开始处理...{Style.RESET_ALL}")
                         break
                 else:
                     empty_line_count = 0
@@ -1126,7 +1144,7 @@ class WalletMonitor:
             print(f"{Fore.CYAN}🔍 支持格式示例:{Style.RESET_ALL}")
             print(f"  • 0x1234567890abcdef... (带0x前缀)")
             print(f"  • 1234567890abcdef... (不带前缀)")
-            input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+            enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
             return
         
         print(f"\n{Fore.GREEN}🎉 发现 {len(private_keys)} 个有效私钥!{Style.RESET_ALL}")
@@ -1174,7 +1192,7 @@ class WalletMonitor:
             print(f"  🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个")
             print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
-            confirm = input(f"\n{Fore.CYAN}确认导入这 {len(new_wallets)} 个新钱包? (y/N): {Style.RESET_ALL}")
+            confirm = enhanced_safe_input(f"\n{Fore.CYAN}确认导入这 {len(new_wallets)} 个新钱包? (y/N): {Style.RESET_ALL}", "n")
             
             if confirm.lower() in ['y', 'yes']:
                 self.wallets.extend(new_wallets)
@@ -1188,7 +1206,7 @@ class WalletMonitor:
             print(f"\n{Fore.YELLOW}💡 所有私钥对应的钱包都已存在{Style.RESET_ALL}")
             print(f"{Fore.CYAN}💼 当前钱包总数: {len(self.wallets)} 个{Style.RESET_ALL}")
         
-        input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
     
     async def check_address_activity_optimized(self, address: str, network_key: str) -> bool:
         """优化的地址活动检查 - 纯RPC模式"""
@@ -1574,7 +1592,7 @@ class WalletMonitor:
             print("  3️⃣ 粘贴您的私钥文本")
             print("  4️⃣ 双击回车确认导入")
             print("  5️⃣ 再次选择功能2开始监控")
-            input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+            enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
             return
         
         print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
@@ -1613,7 +1631,7 @@ class WalletMonitor:
         print(f"  • 月度额度管理: {rate_info['remaining_days']}天剩余")
         
         print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-        confirm = input(f"{Fore.CYAN}确认启动智能监控系统? (y/N): {Style.RESET_ALL}")
+        confirm = enhanced_safe_input(f"{Fore.CYAN}确认启动智能监控系统? (y/N): {Style.RESET_ALL}", "n")
         
         if confirm.lower() in ['y', 'yes']:
             try:
@@ -1628,7 +1646,7 @@ class WalletMonitor:
         else:
             print(f"\n{Fore.YELLOW}❌ 取消监控{Style.RESET_ALL}")
         
-        input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
     
     def show_status(self):
         """显示系统状态 - 简洁版"""
@@ -1644,12 +1662,10 @@ class WalletMonitor:
         
         # 网络状态
         available_count = sum(1 for status in self.network_status.values() if status.available)
-        mainnet_count = sum(1 for net in MAINNET_NETWORKS 
-                           if self.network_status.get(net, NetworkStatus(True,"",0,"")).available)
-        testnet_count = sum(1 for net in TESTNET_NETWORKS 
-                           if self.network_status.get(net, NetworkStatus(True,"",0,"")).available)
+        mainnet_total = len(MAINNET_NETWORKS)
+        testnet_total = len(TESTNET_NETWORKS)
         
-        print(f"🌐 网络: {available_count}/{len(SUPPORTED_NETWORKS)} 可用 (主网:{mainnet_count} 测试网:{testnet_count})")
+        print(f"🌐 网络: {available_count}/{len(SUPPORTED_NETWORKS)} 可用 (主网:{mainnet_total} 测试网:{testnet_total})")
         
         # 转账记录
         transfer_count = 0
@@ -1933,7 +1949,7 @@ class WalletMonitor:
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}").strip()
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7")
                 
                 if choice == "1":
                     self.add_new_api_key()
@@ -1960,7 +1976,7 @@ class WalletMonitor:
         print(f"{Fore.YELLOW}💡 请输入新的Alchemy API密钥{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}格式示例: abcd1234efgh5678ijkl9012mnop3456{Style.RESET_ALL}")
         
-        new_key = input(f"\n{Fore.CYAN}新API密钥: {Style.RESET_ALL}").strip()
+        new_key = enhanced_safe_input(f"\n{Fore.CYAN}新API密钥: {Style.RESET_ALL}", "")
         
         if not new_key:
             print(f"{Fore.RED}❌ API密钥不能为空{Style.RESET_ALL}")
@@ -1977,13 +1993,13 @@ class WalletMonitor:
             else:
                 print(f"{Fore.RED}❌ 添加失败{Style.RESET_ALL}")
         
-        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def manual_switch_api_key(self):
         """手动切换API密钥"""
         if len(ALCHEMY_API_KEYS) <= 1:
             print(f"\n{Fore.YELLOW}⚠️ 只有一个API密钥，无法切换{Style.RESET_ALL}")
-            input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+            enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
             return
         
         old_key = get_current_api_key()
@@ -1998,7 +2014,7 @@ class WalletMonitor:
         # 刷新网络配置
         refresh_network_config()
         
-        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def set_rotation_frequency(self):
         """设置轮询频率"""
@@ -2009,7 +2025,7 @@ class WalletMonitor:
         print(f"{Fore.YELLOW}建议范围: 3-10 次（过低可能触发限制，过高可能不够均匀）{Style.RESET_ALL}")
         
         try:
-            new_freq = input(f"\n{Fore.CYAN}新轮询频率 (回车保持当前): {Style.RESET_ALL}").strip()
+            new_freq = enhanced_safe_input(f"\n{Fore.CYAN}新轮询频率 (回车保持当前): {Style.RESET_ALL}", "")
             
             if new_freq:
                 freq = int(new_freq)
@@ -2024,7 +2040,7 @@ class WalletMonitor:
         except ValueError:
             print(f"{Fore.RED}❌ 请输入有效数字{Style.RESET_ALL}")
         
-        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def test_all_api_keys(self):
         """测试所有API密钥"""
@@ -2060,7 +2076,7 @@ class WalletMonitor:
             time.sleep(0.5)  # 避免连续测试触发限制
         
         print(f"\n{Fore.GREEN}🎉 所有API密钥测试完成{Style.RESET_ALL}")
-        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def reset_monthly_usage(self):
         """重置月度使用统计"""
@@ -2073,7 +2089,7 @@ class WalletMonitor:
         print(f"月度限制: {rate_info['total_monthly_limit']:,} CU")
         print(f"剩余天数: {rate_info['remaining_days']} 天")
         
-        confirm = input(f"\n{Fore.YELLOW}确认重置月度使用统计? (y/N): {Style.RESET_ALL}").strip().lower()
+        confirm = enhanced_safe_input(f"\n{Fore.YELLOW}确认重置月度使用统计? (y/N): {Style.RESET_ALL}", "n").lower()
         
         if confirm in ['y', 'yes']:
             MONTHLY_USAGE_TRACKER['used_cu'] = 0
@@ -2088,7 +2104,44 @@ class WalletMonitor:
         else:
             print(f"{Fore.CYAN}取消重置{Style.RESET_ALL}")
         
-        input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def restart_program(self):
+        """重启程序 - 清理缓存并重新初始化"""
+        print(f"\n{Fore.YELLOW}🔄 程序重启{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}这将清理所有缓存并重新初始化系统{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✅ 日志文件将被保留{Style.RESET_ALL}")
+        
+        confirm = enhanced_safe_input(f"\n{Fore.YELLOW}确认重启程序? (y/N): {Style.RESET_ALL}", "n").lower()
+        
+        if confirm in ['y', 'yes']:
+            print(f"\n{Fore.CYAN}🔄 正在重启...{Style.RESET_ALL}")
+            
+            # 清理缓存
+            smart_cache_cleanup()
+            
+            # 重新初始化
+            try:
+                print(f"{Fore.CYAN}🔄 重新初始化网络连接...{Style.RESET_ALL}")
+                self.web3_clients.clear()
+                self.network_status.clear()
+                
+                # 重新构建网络配置
+                refresh_network_config()
+                
+                # 重新初始化客户端
+                self.initialize_clients()
+                
+                print(f"{Fore.GREEN}✅ 程序重启完成{Style.RESET_ALL}")
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"{Fore.RED}❌ 重启失败: {e}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}💡 请手动重启程序{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.CYAN}取消重启{Style.RESET_ALL}")
+        
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
     def main_menu(self):
         """主菜单 - 完全优化的交互体验"""
@@ -2108,13 +2161,14 @@ class WalletMonitor:
             print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(并发优化，3倍速度提升){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 🔑 API密钥管理 {Fore.GREEN}(轮询系统，无限扩展){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🔄 重启程序    {Fore.GREEN}(清理缓存，重新初始化){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 📖 使用帮助    {Fore.GREEN}(完整指南，故障排除){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}7.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}").strip()
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7")
                 
                 if choice == "1":
                     self.import_private_keys_menu()
@@ -2122,35 +2176,145 @@ class WalletMonitor:
                     self.start_monitoring_menu()
                 elif choice == "3":
                     self.show_detailed_status()
-                    input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+                    enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
                 elif choice == "4":
                     self.api_key_management_menu()
                 elif choice == "5":
-                    self.show_help_menu()
-                    input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+                    self.restart_program()
                 elif choice == "6":
+                    self.show_help_menu()
+                    enhanced_safe_input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
+                elif choice == "7":
                     print(f"\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}💾 所有数据已自动保存{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}🔄 下次启动会自动恢复所有配置{Style.RESET_ALL}")
                     break
                 else:
-                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-6{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5 或 6){Style.RESET_ALL}")
-                    time.sleep(3)  # 给用户时间看到提示
+                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-7{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
+                    time.sleep(2)  # 给用户时间看到提示
                     
             except KeyboardInterrupt:
                 print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                 print(f"{Fore.CYAN}💾 数据已保存{Style.RESET_ALL}")
                 break
+            except EOFError:
+                print(f"\n{Fore.YELLOW}⚠️ 输入流异常，尝试重新初始化...{Style.RESET_ALL}")
+                try:
+                    # 尝试重新打开stdin
+                    import sys
+                    sys.stdin = open('/dev/tty', 'r') if os.path.exists('/dev/tty') else sys.stdin
+                    print(f"{Fore.GREEN}✅ 输入流已重新初始化{Style.RESET_ALL}")
+                    time.sleep(1)
+                    continue
+                except:
+                    print(f"{Fore.RED}❌ 无法修复输入流，程序退出{Style.RESET_ALL}")
+                    break
             except Exception as e:
                 print(f"\n{Fore.RED}❌ 系统错误: {e}{Style.RESET_ALL}")
                 print(f"{Fore.YELLOW}💡 程序将在3秒后继续，如持续出错请重启{Style.RESET_ALL}")
                 time.sleep(3)
 
+def smart_cache_cleanup():
+    """智能缓存清理 - 保留日志文件"""
+    import glob
+    
+    print(f"{Fore.CYAN}🧹 智能缓存清理中...{Style.RESET_ALL}")
+    
+    try:
+        # 要保留的重要文件
+        preserve_files = {
+            'wallets.json',
+            'monitoring_log.json', 
+            'config.json',
+            'wallet_monitor.py',
+            'install.sh',
+            'README.md'
+        }
+        
+        # 清理Python缓存
+        cache_patterns = ['__pycache__', '.pytest_cache', '*.pyc', '*.pyo']
+        cleaned_count = 0
+        
+        for pattern in cache_patterns:
+            for file_path in glob.glob(pattern, recursive=True):
+                try:
+                    if os.path.isdir(file_path):
+                        import shutil
+                        shutil.rmtree(file_path)
+                        cleaned_count += 1
+                    else:
+                        os.remove(file_path)
+                        cleaned_count += 1
+                except:
+                    pass
+        
+        # 清理临时文件 (保留日志)
+        temp_patterns = ['*.tmp', '*.temp', '*.bak', '*.old']
+        for pattern in temp_patterns:
+            for file_path in glob.glob(pattern):
+                if os.path.basename(file_path) not in preserve_files:
+                    try:
+                        os.remove(file_path)
+                        cleaned_count += 1
+                    except:
+                        pass
+        
+        if cleaned_count > 0:
+            print(f"{Fore.GREEN}✅ 清理了 {cleaned_count} 个缓存文件，日志已保留{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.CYAN}✅ 缓存已是最新状态{Style.RESET_ALL}")
+        
+    except Exception as e:
+        print(f"{Fore.YELLOW}⚠️ 缓存清理遇到问题: {e}{Style.RESET_ALL}")
+
+def enhanced_enhanced_safe_input(prompt: str, default: str = "") -> str:
+    """增强的安全输入函数，处理各种输入异常"""
+    import sys
+    
+    try:
+        # 确保输出缓冲区刷新
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # 检查stdin是否可用
+        if not sys.stdin.isatty():
+            print(f"\n{Fore.YELLOW}⚠️ 非交互模式，使用默认值: {default}{Style.RESET_ALL}")
+            return default
+        
+        # 尝试标准输入
+        result = input(prompt)
+        return result.strip() if result else default
+        
+    except EOFError:
+        print(f"\n{Fore.YELLOW}⚠️ 输入流结束，使用默认值: {default}{Style.RESET_ALL}")
+        return default
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}⚠️ 用户中断，使用默认值: {default}{Style.RESET_ALL}")
+        return default
+    except Exception as e:
+        print(f"\n{Fore.RED}❌ 输入错误: {e}，使用默认值: {default}{Style.RESET_ALL}")
+        return default
+
 def main():
     """主函数 - 自动启动"""
     try:
         print(f"{Fore.CYAN}🚀 正在启动钱包监控系统...{Style.RESET_ALL}")
+        
+        # 智能缓存清理
+        smart_cache_cleanup()
+        
+        # 输入流健康检查
+        print(f"{Fore.CYAN}🔍 输入流健康检查...{Style.RESET_ALL}")
+        try:
+            import sys
+            if sys.stdin.isatty():
+                print(f"{Fore.GREEN}✅ 交互模式正常{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}⚠️ 非交互模式，将使用默认值{Style.RESET_ALL}")
+        except:
+            print(f"{Fore.YELLOW}⚠️ 输入流检查失败，将使用安全模式{Style.RESET_ALL}")
+        
         print(f"{Fore.GREEN}✨ 自动进入主菜单模式{Style.RESET_ALL}")
         time.sleep(1)
         
@@ -2169,5 +2333,19 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    # 自动启动主程序
-    main()
+    # 检查命令行参数
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == '--safe-mode':
+        print(f"{Fore.CYAN}🛡️ 安全模式启动 (非交互)...{Style.RESET_ALL}")
+        try:
+            smart_cache_cleanup()
+            monitor = WalletMonitor()
+            monitor.initialize_clients()
+            print(f"\n{Fore.GREEN}✅ 系统初始化完成{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}💡 请使用正常模式启动: python3 wallet_monitor.py{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}❌ 安全模式启动失败: {e}{Style.RESET_ALL}")
+    else:
+        # 自动启动主程序
+        main()
