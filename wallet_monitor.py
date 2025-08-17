@@ -225,30 +225,11 @@ def update_cu_usage(cu_used: int):
     MONTHLY_USAGE_TRACKER['used_cu'] += cu_used
 
 def enhanced_safe_input(prompt: str, default: str = "") -> str:
-    """安全的输入函数，处理EOF和其他异常"""
-    import sys
-    
+    """最简化的输入函数"""
     try:
-        # 确保输出缓冲区刷新
-        sys.stdout.flush()
-        sys.stderr.flush()
-        
-        # 强制交互模式 - 移除isatty检查，因为它在某些环境下会误判
-        # 直接尝试获取用户输入
-        user_input = input(prompt)
-        result = user_input.strip()
-        
-        # 如果用户输入为空，返回默认值
-        return result if result else default
-        
-    except EOFError:
-        print(f"\n{Fore.YELLOW}⚠️ 输入流结束，使用默认值: {default}{Style.RESET_ALL}")
-        return default
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}⚠️ 用户中断，使用默认值: {default}{Style.RESET_ALL}")
-        return default
-    except Exception as e:
-        print(f"\n{Fore.RED}❌ 输入错误: {e}，使用默认值: {default}{Style.RESET_ALL}")
+        result = input(prompt)
+        return result.strip() if result.strip() else default
+    except:
         return default
 
 def get_api_keys_status():
@@ -2403,6 +2384,14 @@ if __name__ == "__main__":
             print(f"{Fore.CYAN}💡 请使用正常模式启动: python3 wallet_monitor.py{Style.RESET_ALL}")
         except Exception as e:
             print(f"{Fore.RED}❌ 安全模式启动失败: {e}{Style.RESET_ALL}")
+    elif len(sys.argv) > 1 and sys.argv[1] == '--fast':
+        print(f"{Fore.CYAN}🚀 快速启动模式 (跳过网络初始化)...{Style.RESET_ALL}")
+        try:
+            monitor = WalletMonitor()
+            # 跳过网络初始化，直接进入菜单
+            monitor.main_menu()
+        except Exception as e:
+            print(f"{Fore.RED}❌ 快速启动失败: {e}{Style.RESET_ALL}")
     else:
         # 强制启用交互模式
         force_interactive_mode()
