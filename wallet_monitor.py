@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-钱包监控转账系统 v3.0 - 全链条混合网络版
-支持Alchemy平台所有EVM/L2链条的钱包监控和自动转账
-SDK优先，RPC兜底的混合网络架构，覆盖32+条主流链条
+钱包监控转账系统 v3.0 - 纯RPC网络版
+支持多个EVM/L2链条的钱包监控和自动转账
+纯RPC网络架构，覆盖多条主流链条
 优化API速度和菜单交互体验，支持Base、Linea、Scroll、zkSync、BSC、AVAX等
 """
 
@@ -25,11 +25,10 @@ def auto_install_dependencies():
     required_packages = {
         'web3': 'web3',
         'eth_account': 'eth-account',
-        'alchemy': 'alchemy-sdk',
         'colorama': 'colorama',
         'aiohttp': 'aiohttp',
         'cryptography': 'cryptography',
-        'dataclass_wizard': 'dataclass-wizard'
+        'requests': 'requests'
     }
     
     missing_packages = []
@@ -66,10 +65,10 @@ if not auto_install_dependencies():
 try:
     from web3 import Web3
     from eth_account import Account
-    from alchemy import Alchemy, Network
     from colorama import Fore, Style, init
     import aiohttp
     import cryptography
+    import requests
     
     # 初始化colorama
     init(autoreset=True)
@@ -89,14 +88,13 @@ MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "config.json"
 NETWORK_STATUS_FILE = "network_status.json"
 
-# 完整的Alchemy支持的EVM/L2链条配置（SDK优先，RPC兜底）
+# 完整的EVM/L2链条配置（纯RPC模式）
 ALCHEMY_NETWORK_CONFIG = {
     # Ethereum
     'ethereum': {
         'name': 'Ethereum 主网',
         'chain_id': 1,
         'currency': 'ETH',
-        'sdk_network': 'ETH_MAINNET',
         'rpc_url': f'https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'mainnet',
         'priority': 1
@@ -105,7 +103,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Ethereum Sepolia',
         'chain_id': 11155111,
         'currency': 'ETH',
-        'sdk_network': None,  # 需要RPC模式
+
         'rpc_url': f'https://eth-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 2
@@ -114,7 +112,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Ethereum Goerli',
         'chain_id': 5,
         'currency': 'ETH',
-        'sdk_network': 'ETH_GOERLI',
+
         'rpc_url': f'https://eth-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 3
@@ -125,7 +123,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Polygon 主网',
         'chain_id': 137,
         'currency': 'MATIC',
-        'sdk_network': 'MATIC_MAINNET',
+
         'rpc_url': f'https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'mainnet',
         'priority': 4
@@ -134,7 +132,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Polygon Mumbai',
         'chain_id': 80001,
         'currency': 'MATIC',
-        'sdk_network': 'MATIC_MUMBAI',
+
         'rpc_url': f'https://polygon-mumbai.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 5
@@ -154,7 +152,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Arbitrum 主网',
         'chain_id': 42161,
         'currency': 'ETH',
-        'sdk_network': 'ARB_MAINNET',
+
         'rpc_url': f'https://arb-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'mainnet',
         'priority': 7
@@ -163,7 +161,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Arbitrum Goerli',
         'chain_id': 421613,
         'currency': 'ETH',
-        'sdk_network': 'ARB_GOERLI',
+
         'rpc_url': f'https://arb-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 8
@@ -192,7 +190,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Optimism 主网',
         'chain_id': 10,
         'currency': 'ETH',
-        'sdk_network': 'OPT_MAINNET',
+
         'rpc_url': f'https://opt-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'mainnet',
         'priority': 11
@@ -201,7 +199,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Optimism Goerli',
         'chain_id': 420,
         'currency': 'ETH',
-        'sdk_network': 'OPT_GOERLI',
+
         'rpc_url': f'https://opt-goerli.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 12
@@ -210,7 +208,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Optimism Kovan',
         'chain_id': 69,
         'currency': 'ETH',
-        'sdk_network': 'OPT_KOVAN',
+
         'rpc_url': f'https://opt-kovan.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'testnet',
         'priority': 13
@@ -397,7 +395,7 @@ ALCHEMY_NETWORK_CONFIG = {
         'name': 'Astar 主网',
         'chain_id': 592,
         'currency': 'ASTR',
-        'sdk_network': 'ASTAR_MAINNET',
+
         'rpc_url': f'https://astar-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}',
         'type': 'mainnet',
         'priority': 32
@@ -533,43 +531,20 @@ ALCHEMY_NETWORK_CONFIG = {
 }
 
 def build_supported_networks():
-    """构建SDK优先，RPC兜底的混合网络系统"""
+    """构建纯RPC网络系统"""
     supported_networks: Dict[str, Any] = {}
     network_names: Dict[str, str] = {}
     mainnets: List[str] = []
     testnets: List[str] = []
     network_priority: Dict[str, int] = {}
     
-    # 1. 获取SDK支持的网络
-    sdk_networks = {}
-    for attr in dir(Network):
-        if not attr.isupper():
-            continue
-        try:
-            value = getattr(Network, attr)
-            if isinstance(value, str):
-                sdk_networks[attr] = value
-        except Exception:
-            continue
-    
-    # 2. 处理所有配置的网络（SDK优先，RPC兜底）
+    # 处理所有配置的网络（纯RPC模式）
     for network_key, config in ALCHEMY_NETWORK_CONFIG.items():
-        # 检查是否有SDK支持
-        sdk_network = config.get('sdk_network')
-        if sdk_network and sdk_network in sdk_networks:
-            # SDK模式
-            supported_networks[network_key] = {
-                'mode': 'sdk',
-                'network': getattr(Network, sdk_network),
-                'config': config
-            }
-        else:
-            # RPC模式
-            supported_networks[network_key] = {
-                'mode': 'rpc',
-                'network': None,
-                'config': config
-            }
+        # 所有网络都使用RPC模式
+        supported_networks[network_key] = {
+            'mode': 'rpc',
+            'config': config
+        }
         
         network_names[network_key] = config['name']
         network_priority[network_key] = config['priority']
@@ -581,7 +556,7 @@ def build_supported_networks():
     
     return supported_networks, network_names, mainnets, testnets, network_priority
 
-# 基于当前Alchemy SDK版本动态构建支持网络
+# 构建支持的网络配置
 SUPPORTED_NETWORKS, NETWORK_NAMES, MAINNET_NETWORKS, TESTNET_NETWORKS, NETWORK_PRIORITY = build_supported_networks()
 
 @dataclass
@@ -601,11 +576,10 @@ class NetworkStatus:
     last_error: str
 
 class WalletMonitor:
-    """钱包监控器 - 完整网络支持版"""
+    """钱包监控器 - 纯RPC网络支持版"""
     
     def __init__(self):
         self.wallets: List[WalletInfo] = []
-        self.alchemy_clients: Dict[str, Alchemy] = {}  # SDK模式客户端
         self.web3_clients: Dict[str, Web3] = {}        # RPC模式客户端
         self.monitoring_active = False
         self.network_status: Dict[str, NetworkStatus] = {}
@@ -613,27 +587,22 @@ class WalletMonitor:
         self.load_network_status()
         
     def initialize_clients(self):
-        """并发初始化所有网络客户端 - SDK优先，RPC兜底模式"""
-        print(f"\n{Fore.CYAN}🔧 并发初始化 {len(SUPPORTED_NETWORKS)} 个网络客户端...{Style.RESET_ALL}")
+        """并发初始化所有网络客户端 - 纯RPC模式"""
+        print(f"\n{Fore.CYAN}🔧 并发初始化 {len(SUPPORTED_NETWORKS)} 个RPC网络客户端...{Style.RESET_ALL}")
         
         def init_single_client(network_item):
             network_key, network_info = network_item
             try:
                 config = network_info['config']
                 
-                if network_info['mode'] == 'sdk':
-                    # SDK模式
-                    client = Alchemy(api_key=ALCHEMY_API_KEY, network=network_info['network'])
-                    return network_key, client, 'sdk', True, None
-                else:
-                    # RPC模式
-                    web3 = Web3(Web3.HTTPProvider(config['rpc_url']))
-                    # 测试连接
-                    web3.eth.get_block_number()
-                    return network_key, web3, 'rpc', True, None
+                # 纯RPC模式
+                web3 = Web3(Web3.HTTPProvider(config['rpc_url']))
+                # 测试连接
+                block_number = web3.eth.get_block_number()
+                return network_key, web3, True, None
                     
             except Exception as e:
-                return network_key, None, network_info['mode'], False, str(e)
+                return network_key, None, False, str(e)
         
         # 使用线程池并发初始化
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
@@ -646,22 +615,13 @@ class WalletMonitor:
             success_count = 0
             mainnet_count = 0
             testnet_count = 0
-            sdk_count = 0
-            rpc_count = 0
             
             for future in concurrent.futures.as_completed(futures):
-                network_key, client, mode, success, error = future.result()
+                network_key, client, success, error = future.result()
                 
                 if success:
-                    # 根据模式存储客户端
-                    if mode == 'sdk':
-                        self.alchemy_clients[network_key] = client
-                        sdk_count += 1
-                        mode_icon = "🔗"
-                    else:
-                        self.web3_clients[network_key] = client
-                        rpc_count += 1
-                        mode_icon = "🌐"
+                    # 存储RPC客户端
+                    self.web3_clients[network_key] = client
                     
                     self.network_status[network_key] = NetworkStatus(
                         available=True,
@@ -673,10 +633,10 @@ class WalletMonitor:
                     # 分类统计
                     if network_key in MAINNET_NETWORKS:
                         mainnet_count += 1
-                        print(f"{Fore.GREEN}{mode_icon} {NETWORK_NAMES[network_key]} (主网-{mode.upper()}){Style.RESET_ALL}")
+                        print(f"{Fore.GREEN}🌐 {NETWORK_NAMES[network_key]} (主网-RPC){Style.RESET_ALL}")
                     else:
                         testnet_count += 1
-                        print(f"{Fore.CYAN}{mode_icon} {NETWORK_NAMES[network_key]} (测试网-{mode.upper()}){Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}🌐 {NETWORK_NAMES[network_key]} (测试网-RPC){Style.RESET_ALL}")
                     
                     success_count += 1
                 else:
@@ -686,16 +646,15 @@ class WalletMonitor:
                         error_count=1,
                         last_error=error
                     )
-                    print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} ({mode.upper()}) - {error[:50]}...{Style.RESET_ALL}")
+                    print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} (RPC) - {error[:50]}...{Style.RESET_ALL}")
         
         self.save_network_status()
         
-        print(f"\n{Fore.GREEN}🎉 混合网络系统初始化完成!{Style.RESET_ALL}")
+        print(f"\n{Fore.GREEN}🎉 RPC网络系统初始化完成!{Style.RESET_ALL}")
         print(f"  📊 总计: {success_count}/{len(SUPPORTED_NETWORKS)} 个网络可用")
         print(f"  🌐 主网: {mainnet_count}/{len(MAINNET_NETWORKS)} 个")
         print(f"  🧪 测试网: {testnet_count}/{len(TESTNET_NETWORKS)} 个")
-        print(f"  🔗 SDK模式: {sdk_count} 个")
-        print(f"  🌐 RPC模式: {rpc_count} 个")
+        print(f"  🌐 RPC模式: {success_count} 个")
     
     def load_network_status(self):
         """加载网络状态缓存"""
@@ -910,7 +869,7 @@ class WalletMonitor:
         input(f"\n{Fore.CYAN}按回车键返回主菜单...{Style.RESET_ALL}")
     
     async def check_address_activity_optimized(self, address: str, network_key: str) -> bool:
-        """优化的地址活动检查 - 混合网络模式"""
+        """优化的地址活动检查 - 纯RPC模式"""
         # 检查网络状态
         network_status = self.network_status.get(network_key)
         if network_status and not network_status.available:
@@ -922,18 +881,12 @@ class WalletMonitor:
             if not network_info:
                 return False
             
-            # 根据模式选择客户端
-            if network_info['mode'] == 'sdk':
-                client = self.alchemy_clients.get(network_key)
-                if not client:
-                    return False
-                return await self._check_activity_sdk(client, address, network_key)
-            else:
-                # RPC模式
-                web3 = self.web3_clients.get(network_key)
-                if not web3:
-                    return False
-                return await self._check_activity_rpc(web3, address, network_key)
+            # RPC模式
+            web3 = self.web3_clients.get(network_key)
+            if not web3:
+                return False
+            return await self._check_activity_rpc(web3, address, network_key)
+            
         except Exception as e:
             error_msg = str(e)
             
@@ -957,63 +910,28 @@ class WalletMonitor:
             
             return False
     
-    async def _check_activity_sdk(self, client: Alchemy, address: str, network_key: str) -> bool:
-        """SDK模式的活动检查"""
-        async with asyncio.timeout(8):  # 8秒超时
-            # 方法1: 检查发送的交易 (最快)
-            try:
-                response = await client.core.get_asset_transfers(
-                    from_address=address,
-                    category=["external"],  # 只检查主要交易类型
-                    max_count=1,           # 只需要1条记录
-                    exclude_zero_value=True # 排除0值交易
-                )
-                
-                if response and hasattr(response, 'transfers') and len(response.transfers) > 0:
-                    return True
-            except Exception as e:
-                pass  # 继续尝试其他方法
-            
-            # 方法2: 检查接收的交易
-            try:
-                response = await client.core.get_asset_transfers(
-                    to_address=address,
-                    category=["external"],
-                    max_count=1,
-                    exclude_zero_value=True
-                )
-                
-                if response and hasattr(response, 'transfers') and len(response.transfers) > 0:
-                    return True
-            except Exception as e:
-                pass
-            
-            # 方法3: 检查当前余额 (最后的检查)
-            try:
-                balance = await client.core.get_balance(address)
-                return int(balance) > 0
-            except Exception as e:
-                pass
-                
-            return False
+
     
     async def _check_activity_rpc(self, web3: Web3, address: str, network_key: str) -> bool:
         """RPC模式的活动检查"""
         try:
+            # 在事件循环中运行同步的web3调用
+            loop = asyncio.get_event_loop()
+            
             # 检查账户余额
-            balance = web3.eth.get_balance(address)
+            balance = await loop.run_in_executor(None, web3.eth.get_balance, address)
             if balance > 0:
                 return True
             
             # 检查交易计数
-            nonce = web3.eth.get_transaction_count(address)
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, address)
             return nonce > 0
             
         except Exception as e:
             return False
     
     async def get_balance_optimized(self, address: str, network_key: str) -> float:
-        """优化的余额获取 - 混合网络模式"""
+        """优化的余额获取 - 纯RPC模式"""
         network_status = self.network_status.get(network_key)
         if network_status and not network_status.available:
             return 0.0
@@ -1025,22 +943,16 @@ class WalletMonitor:
                 return 0.0
             
             async with asyncio.timeout(5):  # 5秒超时
-                if network_info['mode'] == 'sdk':
-                    # SDK模式
-                    client = self.alchemy_clients.get(network_key)
-                    if not client:
-                        return 0.0
-                    balance_wei = await client.core.get_balance(address)
-                    balance_eth = Web3.from_wei(int(balance_wei), 'ether')
-                    return float(balance_eth)
-                else:
-                    # RPC模式
-                    web3 = self.web3_clients.get(network_key)
-                    if not web3:
-                        return 0.0
-                    balance_wei = web3.eth.get_balance(address)
-                    balance_eth = Web3.from_wei(balance_wei, 'ether')
-                    return float(balance_eth)
+                # RPC模式
+                web3 = self.web3_clients.get(network_key)
+                if not web3:
+                    return 0.0
+                
+                # 在事件循环中运行同步的web3调用
+                loop = asyncio.get_event_loop()
+                balance_wei = await loop.run_in_executor(None, web3.eth.get_balance, address)
+                balance_eth = Web3.from_wei(balance_wei, 'ether')
+                return float(balance_eth)
                 
         except asyncio.TimeoutError:
             if network_key in self.network_status:
@@ -1050,7 +962,7 @@ class WalletMonitor:
             return 0.0
     
     async def transfer_balance_optimized(self, wallet: WalletInfo, network_key: str, balance: float) -> bool:
-        """优化的转账功能 - 混合网络模式"""
+        """优化的转账功能 - 纯RPC模式"""
         try:
             # 获取网络信息
             network_info = SUPPORTED_NETWORKS.get(network_key)
@@ -1062,18 +974,11 @@ class WalletMonitor:
             
             # 并发获取交易参数
             async with asyncio.timeout(15):  # 15秒超时
-                if network_info['mode'] == 'sdk':
-                    # SDK模式
-                    client = self.alchemy_clients.get(network_key)
-                    if not client:
-                        return False
-                    return await self._transfer_sdk(client, wallet, network_key, balance, account, config)
-                else:
-                    # RPC模式
-                    web3 = self.web3_clients.get(network_key)
-                    if not web3:
-                        return False
-                    return await self._transfer_rpc(web3, wallet, network_key, balance, account, config)
+                # RPC模式
+                web3 = self.web3_clients.get(network_key)
+                if not web3:
+                    return False
+                return await self._transfer_rpc(web3, wallet, network_key, balance, account, config)
                 
         except asyncio.TimeoutError:
             print(f"{Fore.RED}⏰ {NETWORK_NAMES[network_key]} 转账超时{Style.RESET_ALL}")
@@ -1082,79 +987,51 @@ class WalletMonitor:
             print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
             return False
     
-    async def _transfer_sdk(self, client: Alchemy, wallet: WalletInfo, network_key: str, balance: float, account: Account, config: dict) -> bool:
-        """SDK模式转账"""
-        # 并发获取nonce和gas价格
-        nonce_task = client.core.get_transaction_count(wallet.address)
-        gas_price_task = client.core.get_gas_price()
-        
-        nonce, gas_price = await asyncio.gather(nonce_task, gas_price_task)
-        
-        # 计算gas费用
-        gas_limit = 21000  # 标准转账
-        gas_cost = int(gas_price) * gas_limit
-        
-        # 计算转账金额
-        balance_wei = Web3.to_wei(balance, 'ether')
-        transfer_amount = balance_wei - gas_cost
-        
-        if transfer_amount <= 0:
-            print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
-            return False
-        
-        # 构建交易
-        transaction = {
-            'to': TARGET_ADDRESS,
-            'value': transfer_amount,
-            'gas': gas_limit,
-            'gasPrice': int(gas_price),
-            'nonce': int(nonce),
-            'chainId': config['chain_id']
-        }
-        
-        # 签名并发送交易
-        signed_txn = account.sign_transaction(transaction)
-        tx_hash = await client.core.send_raw_transaction(signed_txn.rawTransaction)
-        
-        # 记录转账
-        self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, int(gas_price), config)
-        return True
+
     
     async def _transfer_rpc(self, web3: Web3, wallet: WalletInfo, network_key: str, balance: float, account: Account, config: dict) -> bool:
         """RPC模式转账"""
-        # 获取nonce和gas价格
-        nonce = web3.eth.get_transaction_count(wallet.address)
-        gas_price = web3.eth.gas_price
-        
-        # 计算gas费用
-        gas_limit = 21000  # 标准转账
-        gas_cost = gas_price * gas_limit
-        
-        # 计算转账金额
-        balance_wei = Web3.to_wei(balance, 'ether')
-        transfer_amount = balance_wei - gas_cost
-        
-        if transfer_amount <= 0:
-            print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
+        try:
+            # 在事件循环中运行同步的web3调用
+            loop = asyncio.get_event_loop()
+            
+            # 获取nonce和gas价格
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, wallet.address)
+            gas_price = await loop.run_in_executor(None, lambda: web3.eth.gas_price)
+            
+            # 计算gas费用
+            gas_limit = 21000  # 标准转账
+            gas_cost = gas_price * gas_limit
+            
+            # 计算转账金额
+            balance_wei = Web3.to_wei(balance, 'ether')
+            transfer_amount = balance_wei - gas_cost
+            
+            if transfer_amount <= 0:
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
+                return False
+            
+            # 构建交易
+            transaction = {
+                'to': TARGET_ADDRESS,
+                'value': transfer_amount,
+                'gas': gas_limit,
+                'gasPrice': gas_price,
+                'nonce': nonce,
+                'chainId': config['chain_id']
+            }
+            
+            # 签名并发送交易
+            signed_txn = account.sign_transaction(transaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            
+            # 记录转账
+            self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
+            return True
+            
+        except Exception as e:
+            print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} RPC转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
             return False
-        
-        # 构建交易
-        transaction = {
-            'to': TARGET_ADDRESS,
-            'value': transfer_amount,
-            'gas': gas_limit,
-            'gasPrice': gas_price,
-            'nonce': nonce,
-            'chainId': config['chain_id']
-        }
-        
-        # 签名并发送交易
-        signed_txn = account.sign_transaction(transaction)
-        tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
-        
-        # 记录转账
-        self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
-        return True
     
     def _log_transfer_success(self, wallet: WalletInfo, network_key: str, transfer_amount: int, tx_hash: Any, gas_cost: int, gas_price: int, config: dict):
         """记录转账成功"""
@@ -1438,7 +1315,7 @@ class WalletMonitor:
         print(f"\n{Fore.GREEN}🔷 主网状态:{Style.RESET_ALL}")
         for network_key in MAINNET_NETWORKS:
             status = self.network_status.get(network_key, NetworkStatus(True, "", 0, ""))
-            if status.available and network_key in self.alchemy_clients:
+            if status.available and network_key in self.web3_clients:
                 print(f"  🟢 {NETWORK_NAMES[network_key]} - 正常")
             else:
                 error_info = f" ({status.last_error[:30]}...)" if status.last_error else ""
@@ -1447,7 +1324,7 @@ class WalletMonitor:
         print(f"\n{Fore.CYAN}🧪 测试网状态:{Style.RESET_ALL}")
         for network_key in TESTNET_NETWORKS:
             status = self.network_status.get(network_key, NetworkStatus(True, "", 0, ""))
-            if status.available and network_key in self.alchemy_clients:
+            if status.available and network_key in self.web3_clients:
                 print(f"  🟢 {NETWORK_NAMES[network_key]} - 正常")
             else:
                 error_info = f" ({status.last_error[:30]}...)" if status.last_error else ""
@@ -1591,8 +1468,8 @@ class WalletMonitor:
             os.system('clear' if os.name == 'posix' else 'cls')
             
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v2.0 - 完整网络支持版{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}支持Alchemy所有{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 智能并发优化 | 人性化交互{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络支持版{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 纯RPC模式 | 智能并发优化 | 人性化交互{Style.RESET_ALL}")
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
             
             self.show_status()
@@ -1639,16 +1516,26 @@ class WalletMonitor:
                 time.sleep(3)
 
 def main():
-    """主函数"""
+    """主函数 - 自动启动"""
     try:
         print(f"{Fore.CYAN}🚀 正在启动钱包监控系统...{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✨ 自动进入主菜单模式{Style.RESET_ALL}")
+        time.sleep(1)
+        
         monitor = WalletMonitor()
         monitor.initialize_clients()
+        
+        # 自动进入主菜单
         monitor.main_menu()
+        
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}👋 程序已退出{Style.RESET_ALL}")
+        sys.exit(0)
     except Exception as e:
         print(f"{Fore.RED}❌ 系统启动失败: {e}{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}💡 请检查网络连接和依赖安装{Style.RESET_ALL}")
         sys.exit(1)
 
 if __name__ == "__main__":
+    # 自动启动主程序
     main()
