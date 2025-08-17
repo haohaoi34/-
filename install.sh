@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# 钱包监控系统智能安装器 v3.0
-# 自动下载、安装依赖、智能合并更新
+# 钱包监控系统智能安装器 v4.0 - Ubuntu 24.04 兼容版
+# 支持虚拟环境和系统包管理器
 
-set -e
+set -e  # 遇到错误时退出
 
 # 颜色定义
 RED='\033[0;31m'
@@ -11,185 +11,401 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-# 项目信息
-GITHUB_REPO="https://raw.githubusercontent.com/haohaoi34/jiankong/main"
-MAIN_PROGRAM="wallet_monitor.py"
-README_FILE="README.md"
+# 清屏
+clear
 
-echo -e "${BLUE}🚀 钱包监控系统智能安装器 v3.0${NC}"
-echo -e "${BLUE}自动下载 | 智能合并 | 一键启动${NC}"
-echo "========================================="
+echo -e "${CYAN}🚀 钱包监控系统智能安装器 v4.0${NC}"
+echo -e "${CYAN}自动下载 | 虚拟环境 | 一键启动 | Ubuntu 24.04 兼容${NC}"
+echo -e "${BLUE}=========================================${NC}"
 
 # 检测操作系统
-echo -e "${CYAN}📋 检查系统环境...${NC}"
-OS_TYPE=$(uname -s)
-case "$OS_TYPE" in
-    Linux*)  OS="Linux";;
-    Darwin*) OS="macOS";;
-    CYGWIN*|MINGW*|MSYS*) OS="Windows";;
-    *) OS="Unknown";;
-esac
-echo -e "${GREEN}✅ 操作系统: $OS${NC}"
-
-# 检测Python
-PYTHON_CMD=""
-if command -v python3 &> /dev/null; then
-    PY_VERSION=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-    MAJOR=$(echo $PY_VERSION | cut -d. -f1)
-    MINOR=$(echo $PY_VERSION | cut -d. -f2)
-    if [[ $MAJOR -ge 3 && $MINOR -ge 7 ]]; then
-        PYTHON_CMD="python3"
-        echo -e "${GREEN}✅ Python: python3 (版本 $PY_VERSION)${NC}"
-    fi
-elif command -v python &> /dev/null; then
-    PY_VERSION=$(python --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-    MAJOR=$(echo $PY_VERSION | cut -d. -f1)
-    MINOR=$(echo $PY_VERSION | cut -d. -f2)
-    if [[ $MAJOR -ge 3 && $MINOR -ge 7 ]]; then
-        PYTHON_CMD="python"
-        echo -e "${GREEN}✅ Python: python (版本 $PY_VERSION)${NC}"
-    fi
-fi
-
-if [ -z "$PYTHON_CMD" ]; then
-    echo -e "${RED}❌ 未找到Python 3.7+${NC}"
-    echo -e "${YELLOW}💡 请先安装Python 3.7或更高版本${NC}"
-    exit 1
-fi
-
-# 检查并安装pip
-echo -e "${CYAN}📦 检查包管理器...${NC}"
-if ! $PYTHON_CMD -m pip --version &> /dev/null; then
-    echo -e "${YELLOW}🔄 安装pip...${NC}"
-    curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-    $PYTHON_CMD get-pip.py
-    rm get-pip.py
-fi
-echo -e "${GREEN}✅ pip可用${NC}"
-
-# 智能下载或更新主程序
-echo -e "${CYAN}📥 检查主程序文件...${NC}"
-if [ -f "$MAIN_PROGRAM" ]; then
-    echo -e "${YELLOW}💡 发现现有主程序，检查是否需要更新...${NC}"
-    
-    # 下载最新版本到临时文件
-    if curl -fsSL "$GITHUB_REPO/$MAIN_PROGRAM" -o "${MAIN_PROGRAM}.new" 2>/dev/null; then
-        # 比较文件差异
-        if ! diff -q "$MAIN_PROGRAM" "${MAIN_PROGRAM}.new" &> /dev/null; then
-            echo -e "${CYAN}🔄 发现新版本，正在智能合并...${NC}"
-            
-            # 备份当前版本
-            cp "$MAIN_PROGRAM" "${MAIN_PROGRAM}.backup"
-            
-            # 替换为新版本
-            mv "${MAIN_PROGRAM}.new" "$MAIN_PROGRAM"
-            echo -e "${GREEN}✅ 主程序已更新${NC}"
+detect_os() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if command -v apt &> /dev/null; then
+            OS="ubuntu"
+            echo -e "${GREEN}✅ 检测到 Ubuntu/Debian 系统${NC}"
+        elif command -v yum &> /dev/null; then
+            OS="centos"
+            echo -e "${GREEN}✅ 检测到 CentOS/RHEL 系统${NC}"
         else
-            echo -e "${GREEN}✅ 主程序已是最新版本${NC}"
-            rm "${MAIN_PROGRAM}.new"
+            OS="linux"
+            echo -e "${YELLOW}⚠️ 检测到 Linux 系统 (未知发行版)${NC}"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        OS="macos"
+        echo -e "${GREEN}✅ 检测到 macOS 系统${NC}"
+    else
+        OS="unknown"
+        echo -e "${RED}❌ 未知操作系统: $OSTYPE${NC}"
+    fi
+}
+
+# 检查 Python
+check_python() {
+    echo -e "${BLUE}📋 检查 Python 环境...${NC}"
+    
+    if command -v python3 &> /dev/null; then
+        PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+        echo -e "${GREEN}✅ Python3: $PYTHON_VERSION${NC}"
+        PYTHON_CMD="python3"
+    elif command -v python &> /dev/null; then
+        PYTHON_VERSION=$(python --version 2>&1 | cut -d' ' -f2)
+        if [[ $PYTHON_VERSION == 3.* ]]; then
+            echo -e "${GREEN}✅ Python: $PYTHON_VERSION${NC}"
+            PYTHON_CMD="python"
+        else
+            echo -e "${RED}❌ Python 版本过低: $PYTHON_VERSION，需要 Python 3.7+${NC}"
+            exit 1
         fi
     else
-        echo -e "${YELLOW}⚠️ 无法检查更新，使用现有版本${NC}"
+        echo -e "${RED}❌ 未找到 Python，请先安装 Python 3.7+${NC}"
+        exit 1
     fi
-else
-    echo -e "${CYAN}📥 下载主程序...${NC}"
-    if curl -fsSL "$GITHUB_REPO/$MAIN_PROGRAM" -o "$MAIN_PROGRAM"; then
-        echo -e "${GREEN}✅ 主程序下载成功${NC}"
+}
+
+# 安装系统依赖
+install_system_dependencies() {
+    echo -e "${BLUE}📦 安装系统依赖...${NC}"
+    
+    case $OS in
+        "ubuntu")
+            echo -e "${CYAN}🔄 更新包列表...${NC}"
+            sudo apt update -qq
+            
+            echo -e "${CYAN}🔄 安装必要的系统包...${NC}"
+            sudo apt install -y python3-full python3-venv python3-pip curl wget git
+            
+            # 确保可以创建虚拟环境
+            if ! $PYTHON_CMD -m venv --help &> /dev/null; then
+                echo -e "${CYAN}🔄 安装 python3-venv...${NC}"
+                sudo apt install -y python3.12-venv || sudo apt install -y python3-venv
+            fi
+            ;;
+        "centos")
+            echo -e "${CYAN}🔄 安装 EPEL 仓库...${NC}"
+            sudo yum install -y epel-release || sudo dnf install -y epel-release
+            
+            echo -e "${CYAN}🔄 安装必要的系统包...${NC}"
+            sudo yum install -y python3 python3-pip python3-venv curl wget git || \
+            sudo dnf install -y python3 python3-pip python3-venv curl wget git
+            ;;
+        "macos")
+            if command -v brew &> /dev/null; then
+                echo -e "${CYAN}🔄 使用 Homebrew 安装依赖...${NC}"
+                brew install python3 curl wget git
+            else
+                echo -e "${YELLOW}⚠️ 建议安装 Homebrew 来管理依赖${NC}"
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}⚠️ 未知系统，跳过系统依赖安装${NC}"
+            ;;
+    esac
+}
+
+# 创建项目目录和虚拟环境
+setup_environment() {
+    echo -e "${BLUE}🏗️ 设置项目环境...${NC}"
+    
+    # 创建项目目录
+    PROJECT_DIR="$HOME/jiankong"
+    VENV_DIR="$PROJECT_DIR/venv"
+    
+    echo -e "${CYAN}📁 创建项目目录: $PROJECT_DIR${NC}"
+    mkdir -p "$PROJECT_DIR"
+    cd "$PROJECT_DIR"
+    
+    # 检查是否已有虚拟环境
+    if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+        echo -e "${GREEN}✅ 虚拟环境已存在${NC}"
     else
-        echo -e "${RED}❌ 主程序下载失败${NC}"
+        echo -e "${CYAN}🔄 创建 Python 虚拟环境...${NC}"
+        
+        # 删除可能存在的损坏的虚拟环境
+        rm -rf "$VENV_DIR"
+        
+        # 创建新的虚拟环境
+        if ! $PYTHON_CMD -m venv "$VENV_DIR"; then
+            echo -e "${RED}❌ 虚拟环境创建失败${NC}"
+            echo -e "${YELLOW}💡 尝试使用系统包管理器安装...${NC}"
+            
+            if [[ $OS == "ubuntu" ]]; then
+                sudo apt install -y python3-venv python3.12-venv
+                $PYTHON_CMD -m venv "$VENV_DIR" || {
+                    echo -e "${RED}❌ 仍然无法创建虚拟环境，请检查系统配置${NC}"
+                    exit 1
+                }
+            else
+                echo -e "${RED}❌ 请手动安装 python3-venv 包${NC}"
+                exit 1
+            fi
+        fi
+        
+        echo -e "${GREEN}✅ 虚拟环境创建成功${NC}"
+    fi
+    
+    # 激活虚拟环境
+    echo -e "${CYAN}🔄 激活虚拟环境...${NC}"
+    source "$VENV_DIR/bin/activate"
+    
+    # 验证虚拟环境
+    if [[ "$VIRTUAL_ENV" ]]; then
+        echo -e "${GREEN}✅ 虚拟环境已激活: $VIRTUAL_ENV${NC}"
+    else
+        echo -e "${RED}❌ 虚拟环境激活失败${NC}"
+        exit 1
+    fi
+    
+    # 升级 pip
+    echo -e "${CYAN}🔄 升级 pip...${NC}"
+    python -m pip install --upgrade pip
+}
+
+# 安装 Python 依赖
+install_python_dependencies() {
+    echo -e "${BLUE}📦 安装 Python 依赖包...${NC}"
+    
+    # 定义依赖包
+    DEPENDENCIES=(
+        "web3>=6.0.0"
+        "eth-account>=0.8.0"
+        "colorama>=0.4.4"
+        "aiohttp>=3.8.0"
+        "cryptography>=3.4.8"
+        "requests>=2.25.1"
+    )
+    
+    # 安装依赖
+    for dep in "${DEPENDENCIES[@]}"; do
+        echo -e "${CYAN}📦 安装 $dep...${NC}"
+        if ! python -m pip install "$dep"; then
+            echo -e "${YELLOW}⚠️ $dep 安装失败，尝试使用 --no-cache-dir${NC}"
+            python -m pip install --no-cache-dir "$dep" || {
+                echo -e "${RED}❌ $dep 安装失败${NC}"
+                exit 1
+            }
+        fi
+    done
+    
+    echo -e "${GREEN}✅ 所有依赖包安装完成${NC}"
+}
+
+# 下载主程序
+download_main_program() {
+    echo -e "${BLUE}📥 下载钱包监控程序...${NC}"
+    
+    GITHUB_URL="https://raw.githubusercontent.com/haohaoi34/jiankong/main/wallet_monitor.py"
+    
+    echo -e "${CYAN}🔄 从 GitHub 下载最新版本...${NC}"
+    if curl -fsSL "$GITHUB_URL" -o wallet_monitor.py; then
+        echo -e "${GREEN}✅ 程序下载成功${NC}"
+    else
+        echo -e "${RED}❌ 程序下载失败${NC}"
         echo -e "${YELLOW}💡 请检查网络连接或手动下载${NC}"
         exit 1
     fi
+    
+    # 设置执行权限
+    chmod +x wallet_monitor.py
+    
+    # 验证文件
+    if [ -f "wallet_monitor.py" ] && [ -s "wallet_monitor.py" ]; then
+        FILE_SIZE=$(wc -c < wallet_monitor.py)
+        echo -e "${GREEN}✅ 程序文件验证成功 (大小: $FILE_SIZE 字节)${NC}"
+    else
+        echo -e "${RED}❌ 程序文件验证失败${NC}"
+        exit 1
+    fi
+}
+
+# 创建启动脚本
+create_startup_script() {
+    echo -e "${BLUE}📝 创建启动脚本...${NC}"
+    
+    cat > start.sh << 'EOF'
+#!/bin/bash
+
+# 钱包监控系统启动脚本
+# 自动激活虚拟环境并启动程序
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$PROJECT_DIR/venv"
+
+echo "🚀 启动钱包监控系统..."
+echo "📁 项目目录: $PROJECT_DIR"
+
+# 检查虚拟环境
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "❌ 虚拟环境不存在，请重新运行安装脚本"
+    exit 1
 fi
 
-# 下载README（如果不存在）
-if [ ! -f "$README_FILE" ]; then
-    echo -e "${CYAN}📄 下载README文档...${NC}"
-    if curl -fsSL "$GITHUB_REPO/$README_FILE" -o "$README_FILE" 2>/dev/null; then
-        echo -e "${GREEN}✅ README下载成功${NC}"
-    else
-        echo -e "${YELLOW}⚠️ README下载失败，将创建简单版本${NC}"
-        cat > "$README_FILE" << 'EOF'
-# 钱包监控转账系统 v3.0
+# 激活虚拟环境
+source "$VENV_DIR/bin/activate"
 
-## 快速启动
-```bash
-./install.sh
-```
+# 检查主程序
+if [ ! -f "$PROJECT_DIR/wallet_monitor.py" ]; then
+    echo "❌ 主程序文件不存在"
+    exit 1
+fi
 
-## 功能特性
-- 🌐 多链支持：支持多个EVM兼容链
-- 🔑 智能私钥导入：批量导入，智能识别
-- 🎯 自动监控：实时监控钱包余额变化
-- 💸 自动转账：发现余额立即转移
-- 📊 交互式界面：简洁友好的命令行界面
-
-## 使用方法
-1. 运行 `python3 wallet_monitor.py`
-2. 选择功能1导入私钥
-3. 选择功能2开始监控
-
-## 注意事项
-- 需要Python 3.7+
-- 需要稳定的网络连接
-- 请在测试网络上先行测试
+# 启动程序
+cd "$PROJECT_DIR"
+python wallet_monitor.py "$@"
 EOF
+    
+    chmod +x start.sh
+    echo -e "${GREEN}✅ 启动脚本创建成功${NC}"
+}
+
+# 创建便捷命令
+create_convenience_commands() {
+    echo -e "${BLUE}🔗 创建便捷命令...${NC}"
+    
+    # 创建符号链接到用户 bin 目录
+    USER_BIN="$HOME/.local/bin"
+    mkdir -p "$USER_BIN"
+    
+    # 创建全局命令脚本
+    cat > "$USER_BIN/jiankong" << EOF
+#!/bin/bash
+cd "$PROJECT_DIR" && ./start.sh "\$@"
+EOF
+    
+    chmod +x "$USER_BIN/jiankong"
+    
+    # 添加到 PATH（如果还没有）
+    if [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+        echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
+        echo -e "${YELLOW}💡 请运行 'source ~/.bashrc' 或重新登录以使用全局命令${NC}"
     fi
-fi
+    
+    echo -e "${GREEN}✅ 便捷命令创建成功${NC}"
+    echo -e "${CYAN}💡 您可以在任意目录运行 'jiankong' 命令启动程序${NC}"
+}
 
-# 安装Python依赖
-echo -e "${CYAN}📦 安装Python依赖...${NC}"
-PACKAGES=(
-    "web3"
-    "eth-account" 
-    "colorama"
-    "aiohttp"
-    "cryptography"
-    "requests"
-)
+# 创建桌面快捷方式（仅限有桌面环境的系统）
+create_desktop_shortcut() {
+    if [ -d "$HOME/Desktop" ] && command -v xdg-user-dir &> /dev/null; then
+        echo -e "${BLUE}🖥️ 创建桌面快捷方式...${NC}"
+        
+        DESKTOP_FILE="$HOME/Desktop/钱包监控系统.desktop"
+        cat > "$DESKTOP_FILE" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=钱包监控系统
+Comment=智能钱包监控和自动转账系统
+Exec=$PROJECT_DIR/start.sh
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;Development;
+StartupNotify=true
+EOF
+        
+        chmod +x "$DESKTOP_FILE"
+        echo -e "${GREEN}✅ 桌面快捷方式创建成功${NC}"
+    fi
+}
 
-for package in "${PACKAGES[@]}"; do
-    if $PYTHON_CMD -c "import ${package//-/_}" &> /dev/null; then
-        echo -e "${GREEN}✅ $package 已安装${NC}"
+# 显示安装完成信息
+show_completion_info() {
+    echo ""
+    echo -e "${GREEN}🎉 钱包监控系统安装完成！${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+    echo -e "${CYAN}📁 安装目录: $PROJECT_DIR${NC}"
+    echo -e "${CYAN}🐍 虚拟环境: $VENV_DIR${NC}"
+    echo -e "${CYAN}🚀 主程序: $PROJECT_DIR/wallet_monitor.py${NC}"
+    echo ""
+    echo -e "${YELLOW}🚀 启动方式:${NC}"
+    echo -e "${WHITE}1. 直接启动:${NC}"
+    echo -e "   cd $PROJECT_DIR && ./start.sh"
+    echo ""
+    echo -e "${WHITE}2. 全局命令 (推荐):${NC}"
+    echo -e "   jiankong"
+    echo ""
+    echo -e "${WHITE}3. 手动启动:${NC}"
+    echo -e "   cd $PROJECT_DIR"
+    echo -e "   source venv/bin/activate"
+    echo -e "   python wallet_monitor.py"
+    echo ""
+    echo -e "${YELLOW}💡 功能特性:${NC}"
+    echo -e "• 🔍 支持 ${#SUPPORTED_NETWORKS[@]} 个 EVM 兼容网络"
+    echo -e "• 🪙 ERC20 代币自动检测和转账"
+    echo -e "• 📱 Telegram 通知推送"
+    echo -e "• ⚡ 智能 Gas 费优化"
+    echo -e "• 🔄 API 密钥自动轮询"
+    echo -e "• 💾 智能缓存和状态恢复"
+    echo ""
+    echo -e "${GREEN}🎯 现在就可以启动程序开始使用！${NC}"
+}
+
+# 主安装流程
+main() {
+    echo -e "${BLUE}📋 开始安装...${NC}"
+    
+    # 检测系统
+    detect_os
+    
+    # 检查 Python
+    check_python
+    
+    # 安装系统依赖
+    install_system_dependencies
+    
+    # 设置环境
+    setup_environment
+    
+    # 安装 Python 依赖
+    install_python_dependencies
+    
+    # 下载主程序
+    download_main_program
+    
+    # 创建启动脚本
+    create_startup_script
+    
+    # 创建便捷命令
+    create_convenience_commands
+    
+    # 创建桌面快捷方式
+    create_desktop_shortcut
+    
+    # 显示完成信息
+    show_completion_info
+    
+    # 询问是否立即启动
+    echo ""
+    read -p "🚀 是否立即启动钱包监控系统？ (y/N): " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}🚀 启动钱包监控系统...${NC}"
+        ./start.sh
     else
-        echo -e "${CYAN}🔄 安装 $package...${NC}"
-        if $PYTHON_CMD -m pip install "$package" &> /dev/null; then
-            echo -e "${GREEN}✅ $package 安装成功${NC}"
-        else
-            if $PYTHON_CMD -m pip install --user "$package" &> /dev/null; then
-                echo -e "${GREEN}✅ $package 安装成功 (用户模式)${NC}"
-            else
-                echo -e "${RED}❌ $package 安装失败${NC}"
-            fi
-        fi
+        echo -e "${CYAN}💡 稍后可以运行 './start.sh' 或 'jiankong' 命令启动程序${NC}"
     fi
-done
+}
 
-# 设置执行权限
-chmod +x "$MAIN_PROGRAM" 2>/dev/null || true
+# 错误处理
+handle_error() {
+    echo ""
+    echo -e "${RED}❌ 安装过程中发生错误${NC}"
+    echo -e "${YELLOW}💡 请检查错误信息并重试，或手动安装${NC}"
+    echo ""
+    echo -e "${CYAN}📞 获取支持:${NC}"
+    echo -e "• 检查网络连接"
+    echo -e "• 确保有足够的磁盘空间"
+    echo -e "• 尝试使用 sudo 权限"
+    echo -e "• 查看具体错误信息进行排查"
+    exit 1
+}
 
-echo ""
-echo -e "${GREEN}🎉 安装完成!${NC}"
-echo "========================================="
-echo -e "${GREEN}📋 项目文件:${NC}"
-echo -e "${GREEN}  ✅ 主程序: $MAIN_PROGRAM${NC}"
-echo -e "${GREEN}  ✅ 安装器: install.sh${NC}"
-echo -e "${GREEN}  ✅ 文档: $README_FILE${NC}"
-echo "========================================="
-echo -e "${CYAN}🚀 启动方法:${NC}"
-echo -e "${CYAN}  方法1: $PYTHON_CMD $MAIN_PROGRAM${NC}"
-echo -e "${CYAN}  方法2: ./$MAIN_PROGRAM${NC}"
-echo "========================================="
+# 设置错误处理
+trap 'handle_error' ERR
 
-# 询问是否立即启动
-echo ""
-read -p "$(echo -e "${CYAN}是否立即启动钱包监控系统? (y/N): ${NC}")" start_now
-if [[ "$start_now" =~ ^[Yy]$ ]]; then
-    echo -e "${GREEN}🚀 启动钱包监控系统...${NC}"
-    exec $PYTHON_CMD "$MAIN_PROGRAM"
-else
-    echo -e "${YELLOW}💡 稍后运行以下命令启动:${NC}"
-    echo -e "${CYAN}  $PYTHON_CMD $MAIN_PROGRAM${NC}"
-fi
+# 运行主程序
+main "$@"
