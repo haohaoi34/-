@@ -226,16 +226,32 @@ def update_cu_usage(cu_used: int):
 
 def enhanced_safe_input(prompt: str, default: str = "") -> str:
     """安全的输入函数，处理EOF和其他异常"""
+    import sys
+    
     try:
-        return input(prompt).strip()
+        # 确保输出缓冲区刷新
+        sys.stdout.flush()
+        
+        # 检查stdin是否可用
+        if not sys.stdin.isatty():
+            print(f"\n{Fore.YELLOW}⚠️ 非交互模式，使用默认值: {default}{Style.RESET_ALL}")
+            return default
+        
+        # 尝试获取输入
+        user_input = input(prompt)
+        result = user_input.strip()
+        
+        # 如果用户输入为空，返回默认值
+        return result if result else default
+        
     except EOFError:
-        print(f"\n{Fore.YELLOW}⚠️ 输入中断，使用默认值{Style.RESET_ALL}")
+        print(f"\n{Fore.YELLOW}⚠️ 输入流结束，使用默认值: {default}{Style.RESET_ALL}")
         return default
     except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}⚠️ 用户中断{Style.RESET_ALL}")
+        print(f"\n{Fore.YELLOW}⚠️ 用户中断，使用默认值: {default}{Style.RESET_ALL}")
         return default
     except Exception as e:
-        print(f"\n{Fore.RED}❌ 输入错误: {e}{Style.RESET_ALL}")
+        print(f"\n{Fore.RED}❌ 输入错误: {e}，使用默认值: {default}{Style.RESET_ALL}")
         return default
 
 def get_api_keys_status():
@@ -1905,7 +1921,10 @@ class WalletMonitor:
     def api_key_management_menu(self):
         """API密钥管理菜单"""
         while True:
-            os.system('clear' if os.name == 'posix' else 'cls')
+            try:
+                os.system('clear' if os.name == 'posix' else 'cls')
+            except:
+                print("\n" * 50)  # 替代清屏
             
             print(f"{Fore.BLUE}{'='*70}{Style.RESET_ALL}")
             print(f"{Fore.BLUE}🔑 API密钥轮询管理系统{Style.RESET_ALL}")
@@ -1949,7 +1968,14 @@ class WalletMonitor:
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7")
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-6): {Style.RESET_ALL}", "6").strip()
+                
+                # 验证输入是否为有效数字
+                if choice not in ["1", "2", "3", "4", "5", "6"]:
+                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-6{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5 或 6){Style.RESET_ALL}")
+                    time.sleep(3)
+                    continue
                 
                 if choice == "1":
                     self.add_new_api_key()
@@ -1963,9 +1989,6 @@ class WalletMonitor:
                     self.test_all_api_keys()
                 elif choice == "6":
                     break
-                else:
-                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-6{Style.RESET_ALL}")
-                    time.sleep(2)
                     
             except KeyboardInterrupt:
                 break
@@ -2147,7 +2170,10 @@ class WalletMonitor:
         """主菜单 - 完全优化的交互体验"""
         while True:
             # 清屏，提供清爽的界面
-            os.system('clear' if os.name == 'posix' else 'cls')
+            try:
+                os.system('clear' if os.name == 'posix' else 'cls')
+            except:
+                print("\n" * 50)  # 替代清屏
             
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
             print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络版{Style.RESET_ALL}")
@@ -2166,9 +2192,20 @@ class WalletMonitor:
             print(f"  {Fore.CYAN}7.{Style.RESET_ALL} 🚪 退出程序    {Fore.GREEN}(安全退出，保存状态){Style.RESET_ALL}")
             
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}💡 系统就绪，等待您的选择...{Style.RESET_ALL}")
             
             try:
-                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7")
+                choice = enhanced_safe_input(f"{Fore.CYAN}请选择功能 (1-7): {Style.RESET_ALL}", "7").strip()
+                
+                # 显示用户选择的确认
+                print(f"{Fore.GREEN}✅ 您选择了: {choice}{Style.RESET_ALL}")
+                
+                # 验证输入是否为有效数字
+                if choice not in ["1", "2", "3", "4", "5", "6", "7"]:
+                    print(f"\n{Fore.RED}❌ 无效选择 '{choice}'，请输入 1-7{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
+                    time.sleep(3)  # 给用户时间看到提示
+                    continue
                 
                 if choice == "1":
                     self.import_private_keys_menu()
@@ -2189,10 +2226,6 @@ class WalletMonitor:
                     print(f"{Fore.CYAN}💾 所有数据已自动保存{Style.RESET_ALL}")
                     print(f"{Fore.CYAN}🔄 下次启动会自动恢复所有配置{Style.RESET_ALL}")
                     break
-                else:
-                    print(f"\n{Fore.RED}❌ 无效选择，请输入 1-7{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}💡 提示: 请输入菜单中显示的数字 (1、2、3、4、5、6 或 7){Style.RESET_ALL}")
-                    time.sleep(2)  # 给用户时间看到提示
                     
             except KeyboardInterrupt:
                 print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
