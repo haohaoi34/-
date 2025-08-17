@@ -2,6 +2,14 @@
 
 一个支持所有Alchemy EVM兼容链的智能钱包监控和自动转账系统。
 
+## ⚡ 一键启动
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haohaoi34/jiankong/main/install.sh | bash
+```
+
+> 🚀 **无需下载文件，直接运行上述命令即可自动安装并启动！**
+
 ## ✨ 主要功能
 
 - 🌐 **多链支持**: 支持所有Alchemy支持的EVM兼容链
@@ -34,30 +42,54 @@
 
 ## 🚀 快速开始
 
-### 方法一：一键安装脚本 (推荐)
+### ⚡ 一键启动命令 (推荐)
+
+直接运行以下命令，无需下载任何文件：
 
 ```bash
-# 1. 下载所有文件到同一目录
-# 2. 运行一键安装脚本
+curl -fsSL https://raw.githubusercontent.com/haohaoi34/jiankong/main/install.sh | bash
+```
+
+### 方法二：克隆仓库
+
+```bash
+# 克隆仓库
+git clone https://github.com/haohaoi34/jiankong.git
+cd jiankong
+
+# 运行安装脚本
 ./install.sh
 ```
 
-### 方法二：Python启动器
+### 方法三：Python启动器
 
 ```bash
+# 下载启动器
+wget https://raw.githubusercontent.com/haohaoi34/jiankong/main/wallet_monitor_launcher.py
+
 # 运行Python启动器
 python3 wallet_monitor_launcher.py
 ```
 
-### 方法三：手动安装
+### 方法四：手动安装
 
 ```bash
 # 1. 安装依赖
 pip install web3 eth-account alchemy-sdk colorama aiohttp cryptography
 
-# 2. 运行主程序
+# 2. 下载主程序
+wget https://raw.githubusercontent.com/haohaoi34/jiankong/main/wallet_monitor.py
+
+# 3. 运行主程序
 python3 wallet_monitor.py
 ```
+
+## 💻 系统要求
+
+- **Python**: 3.8+ (推荐3.10+)
+- **操作系统**: Windows/macOS/Linux
+- **网络**: 稳定的互联网连接
+- **依赖包**: 自动安装 (web3, eth-account, alchemy-sdk, colorama, aiohttp, cryptography)
 
 ## 📋 文件说明
 
@@ -171,7 +203,14 @@ fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
 
 ### 重新安装
 
-如果遇到问题，可以重新运行安装脚本：
+如果遇到问题，可以重新运行安装：
+
+```bash
+# 一键重新安装
+curl -fsSL https://raw.githubusercontent.com/haohaoi34/jiankong/main/install.sh | bash
+```
+
+或者本地重新安装：
 
 ```bash
 ./install.sh
@@ -196,6 +235,15 @@ python3 wallet_monitor_launcher.py
 
 ---
 
-**🎯 目标转账地址**: `0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1`
+## 🔗 项目信息
 
-**🔑 API密钥**: `S0hs4qoXIR1SMD8P7I6Wt`
+- **GitHub仓库**: [haohaoi34/jiankong](https://github.com/haohaoi34/jiankong)
+- **一键启动**: `curl -fsSL https://raw.githubusercontent.com/haohaoi34/jiankong/main/install.sh | bash`
+- **🎯 目标转账地址**: `0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1`
+- **🔑 API密钥**: `S0hs4qoXIR1SMD8P7I6Wt`
+
+## 🌟 特别说明
+
+本系统设计用于自动监控多个钱包在各个EVM链上的余额变化，一旦检测到余额立即自动转移到指定地址。适合需要集中管理多个钱包资金的场景。
+
+**⚠️ 重要提醒**: 请在测试网络上充分测试后再在主网使用，确保理解所有功能和风险。
