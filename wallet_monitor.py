@@ -25,8 +25,44 @@ try:
     from colorama import Fore, Back, Style
 except ImportError as e:
     print(f"❌ 缺少必要的依赖包: {e}")
-    print("💡 请运行 wallet_monitor_launcher.py 来自动安装依赖")
-    sys.exit(1)
+    print("💡 正在尝试自动安装缺失的依赖...")
+    
+    # 尝试自动安装缺失的包
+    import subprocess
+    missing_packages = {
+        'alchemy': 'alchemy-sdk',
+        'web3': 'web3', 
+        'eth_account': 'eth-account',
+        'colorama': 'colorama'
+    }
+    
+    for module, package in missing_packages.items():
+        try:
+            __import__(module)
+        except ImportError:
+            print(f"📦 安装 {package}...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--user", "--upgrade"])
+                print(f"✅ {package} 安装成功")
+            except:
+                try:
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--break-system-packages", "--upgrade"])
+                    print(f"✅ {package} 安装成功")
+                except:
+                    print(f"❌ {package} 安装失败")
+    
+    # 重新尝试导入
+    try:
+        from alchemy import Alchemy, Network
+        from web3 import Web3
+        from eth_account import Account
+        import colorama
+        from colorama import Fore, Back, Style
+        print("✅ 依赖安装成功，继续运行...")
+    except ImportError as e:
+        print(f"❌ 依赖安装失败: {e}")
+        print("💡 请手动运行: pip install web3 eth-account alchemy-sdk colorama --user")
+        sys.exit(1)
 
 # 初始化colorama
 colorama.init()
