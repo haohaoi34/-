@@ -28,9 +28,6 @@ except ImportError:
         def geth_poa_middleware(w3):
             return w3
 from eth_account import Account
-from prompt_toolkit import prompt
-from prompt_toolkit.shortcuts import yes_no_dialog, message_dialog
-from prompt_toolkit.formatted_text import HTML
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -1172,9 +1169,19 @@ class MonitoringApp:
         """从输入文本中提取私钥
         支持 0x 前缀与不带前缀的64位十六进制，去重并验证有效性
         """
+        if not private_keys_input or not private_keys_input.strip():
+            return []
+            
+        # 清理输入：移除多余空格、换行符、制表符
+        cleaned_input = re.sub(r'\s+', ' ', private_keys_input.strip())
+        
         # 同时匹配 0x 前缀和无前缀的私钥片段
         private_key_pattern = r'(?:0x)?[a-fA-F0-9]{64}'
-        matches = re.findall(private_key_pattern, private_keys_input)
+        matches = re.findall(private_key_pattern, cleaned_input)
+
+        if not matches:
+            logging.warning("未找到符合格式的私钥")
+            return []
 
         normalized_keys: List[str] = []
         for key in matches:
@@ -1329,6 +1336,13 @@ class MonitoringApp:
                 symbol = token_info['symbol']
                 balance = token_info['balance']
                 
+                # 检查最小转账金额（仅对原生代币）
+                if token_type == 'native':
+                    min_amount = float(chain_setting.get('min_amount', '0.001'))
+                    if balance < min_amount:
+                        logging.debug(f"余额低于最小转账金额 {chain_config['name']}: {balance} < {min_amount} {symbol}")
+                        continue
+                
                 logging.info(f"发现可转账余额 {chain_config['name']}: {balance} {symbol} ({token_type}) (地址: {address})")
                 
                 try:
@@ -1407,42 +1421,84 @@ class MonitoringApp:
     
     async def start_monitoring(self):
         """开始监控"""
+        # 验证前置条件
         if not self.addresses:
+            print("❌ 没有可监控的地址，请先导入私钥")
             logging.error("没有可监控的地址")
             return
+        
+        if not self.config.get('chains'):
+            print("❌ 没有配置监控链，请重新导入私钥")
+            logging.error("没有配置监控链")
+            return
+            
+        if not self.alchemy_api:
+            print("❌ API未初始化")
+            logging.error("API未初始化")
+            return
+        
+        print(f"✅ 开始监控 {len(self.addresses)} 个地址在 {len(self.config['chains'])} 条链上...")
+        print("按 Ctrl+C 停止监控")
         
         self.monitoring_active = True
         logging.info("开始监控...")
         
         try:
+            round_count = 0
             while self.monitoring_active:
+                round_count += 1
+                print(f"\n🔍 第 {round_count} 轮监控开始...")
+                
                 # 监控所有地址在所有链上的余额
                 tasks = []
                 
                 for address_info in self.addresses:
-                    for chain_name, chain_config in ChainConfig.SUPPORTED_CHAINS.items():
-                        task = self.monitor_address_chain(address_info, chain_config)
-                        tasks.append(task)
+                    for chain_setting in self.config['chains']:
+                        # 获取链配置
+                        chain_config = None
+                        for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                            if supported_config['chain_id'] == chain_setting['chain_id']:
+                                chain_config = supported_config
+                                break
+                        
+                        if chain_config:
+                            task = self.monitor_address_chain(address_info, chain_config)
+                            tasks.append(task)
                 
                 # 并发执行所有监控任务
                 if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # 统计结果
+                    success_count = 0
+                    error_count = 0
+                    for result in results:
+                        if isinstance(result, Exception):
+                            error_count += 1
+                        else:
+                            success_count += 1
+                    
+                    print(f"✅ 第 {round_count} 轮监控完成: {success_count} 成功, {error_count} 错误")
                 
                 # 轮询间隔
                 monitoring_interval = self.config.get('settings', {}).get('monitoring_interval', 0.1)
-                await asyncio.sleep(monitoring_interval)
+                if monitoring_interval > 0:
+                    await asyncio.sleep(monitoring_interval)
                 
-                # 每轮监控后暂停（减少默认暂停时间以提升效率）
-                round_pause = self.config.get('settings', {}).get('round_pause', 10)  # 从60秒减少到10秒
-                logging.info(f"本轮监控完成，暂停 {round_pause} 秒...")
+                # 每轮监控后暂停
+                round_pause = self.config.get('settings', {}).get('round_pause', 10)
+                print(f"⏸️  暂停 {round_pause} 秒后开始下一轮...")
                 await asyncio.sleep(round_pause)
                 
         except KeyboardInterrupt:
+            print("\n⏹️  监控被用户中断")
             logging.info("监控被用户中断")
         except Exception as e:
+            print(f"❌ 监控过程中出错: {e}")
             logging.error(f"监控过程中出错: {e}")
         finally:
             self.monitoring_active = False
+            print("🛑 监控已停止")
             logging.info("监控已停止")
     
     def stop_monitoring(self):
@@ -1461,9 +1517,7 @@ class MonitoringApp:
                 print("3. 退出")
                 print("-"*50)
                 
-                choice = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("请选择操作 (1-3): ").strip()
-                )
+                choice = input("请选择操作 (1-3): ").strip()
                 
                 if choice == "3":
                     print("感谢使用！")
@@ -1471,6 +1525,13 @@ class MonitoringApp:
                 elif choice == "1":
                     await self.configure_private_keys()
                 elif choice == "2":
+                    if not self.addresses:
+                        print("❌ 请先导入私钥！")
+                        continue
+                    if not self.config.get('chains'):
+                        print("❌ 配置错误，请重新导入私钥！")
+                        continue
+                    print("开始监控...")
                     await self.start_monitoring()
                 else:
                     print("无效选择，请重试")
@@ -1486,112 +1547,138 @@ class MonitoringApp:
         """导入私钥"""
         print("\n导入私钥")
         print("请输入私钥（支持一次性粘贴多个私钥，系统会自动提取有效私钥）:")
-        print("例如: 0xabc123...def789,0x123...456 或每行一个私钥")
-        print("粘贴后直接按回车确认")
+        print("支持格式:")
+        print("- 单个私钥: 0xabc123...def789")
+        print("- 多个私钥: 0xabc123...def789,0x123...456")
+        print("- 每行一个私钥（支持多行粘贴）")
+        print("- 输入 'END' 结束多行输入")
+        print("-"*50)
 
-        private_keys_input = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: input("私钥内容: ").strip()
-        )
+        # 支持多行输入
+        lines = []
+        print("请输入私钥内容:")
+        
+        try:
+            while True:
+                line = input().strip()
+                if line.upper() == 'END':
+                    break
+                if line:
+                    lines.append(line)
+                if not line:  # 空行也结束输入
+                    break
+        except EOFError:
+            # 处理粘贴多行后的EOF
+            pass
+        except Exception as e:
+            print(f"输入错误: {e}")
+            return
+
+        private_keys_input = ' '.join(lines)
 
         if private_keys_input and private_keys_input.strip():
             private_keys = self.extract_private_keys(private_keys_input)
             if private_keys:
-                print(f"提取到 {len(private_keys)} 个有效私钥")
+                print(f"✅ 提取到 {len(private_keys)} 个有效私钥")
 
-                # 询问接收地址
-                recipient_address = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("请输入接收地址 (转账目标地址): ").strip()
-                )
-                
-                # 验证地址格式
-                if not Web3.is_address(recipient_address):
-                    print("无效的以太坊地址格式")
-                    return
-
-                # 将私钥写入.env
-                joined_keys = ",".join(private_keys)
-                with open('.env', 'w', encoding='utf-8') as f:
-                    f.write(f"ALCHEMY_API_KEY=MYr2ZG1P7bxc4F1qVTLIj\n")
-                    f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
-
-                # 重新初始化地址列表
-                self.addresses = []
-                for private_key in private_keys:
+                # 显示对应的地址
+                print("\n对应地址:")
+                for i, private_key in enumerate(private_keys):
                     try:
                         account = Account.from_key(private_key)
-                        self.addresses.append({
-                            'address': account.address,
-                            'private_key': private_key
-                        })
-                        print(f"地址: {account.address}")
+                        print(f"{i+1}. {account.address}")
                     except Exception as e:
-                        logging.error(f"处理私钥失败: {e}")
+                        print(f"{i+1}. 错误: {e}")
 
-                # 设置默认配置 - 监控所有主要链
-                self.config = {
-                    "chains": [
-                        {
-                            "name": "ETH_MAINNET",
-                            "chain_id": 1,
+                # 询问接收地址
+                print("\n请输入接收地址 (所有转账的目标地址):")
+                recipient_address = input("接收地址: ").strip()
+                
+                # 验证地址格式
+                if not recipient_address:
+                    print("❌ 接收地址不能为空")
+                    return
+                    
+                if not Web3.is_address(recipient_address):
+                    print("❌ 无效的以太坊地址格式")
+                    return
+
+                try:
+                    # 将私钥写入.env
+                    joined_keys = ",".join(private_keys)
+                    with open('.env', 'w', encoding='utf-8') as f:
+                        f.write(f"ALCHEMY_API_KEY=MYr2ZG1P7bxc4F1qVTLIj\n")
+                        f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
+
+                    # 重新初始化地址列表
+                    self.addresses = []
+                    for private_key in private_keys:
+                        try:
+                            account = Account.from_key(private_key)
+                            self.addresses.append({
+                                'address': account.address,
+                                'private_key': private_key
+                            })
+                        except Exception as e:
+                            logging.error(f"处理私钥失败: {e}")
+
+                    # 创建完整的配置 - 包含所有支持的链
+                    chains_config = []
+                    for chain_name, chain_info in ChainConfig.SUPPORTED_CHAINS.items():
+                        chains_config.append({
+                            "name": chain_name,
+                            "chain_id": chain_info['chain_id'],
                             "recipient_address": recipient_address,
                             "min_amount": "0.001"
-                        },
-                        {
-                            "name": "POLYGON_MAINNET", 
-                            "chain_id": 137,
-                            "recipient_address": recipient_address,
-                            "min_amount": "1"
-                        },
-                        {
-                            "name": "ARBITRUM_ONE",
-                            "chain_id": 42161,
-                            "recipient_address": recipient_address,
-                            "min_amount": "0.001"
-                        },
-                        {
-                            "name": "OPTIMISM_MAINNET",
-                            "chain_id": 10,
-                            "recipient_address": recipient_address,
-                            "min_amount": "0.001"
-                        },
-                        {
-                            "name": "BASE_MAINNET",
-                            "chain_id": 8453,
-                            "recipient_address": recipient_address,
-                            "min_amount": "0.001"
+                        })
+
+                    self.config = {
+                        "chains": chains_config,
+                        "erc20": [],
+                        "settings": {
+                            "monitoring_interval": 0.1,
+                            "round_pause": 10,
+                            "gas_threshold_gwei": 50,
+                            "gas_wait_time": 60
                         }
-                    ],
-                    "erc20": [],
-                    "settings": {
-                        "monitoring_interval": 0.1,
-                        "round_pause": 10,
-                        "gas_threshold_gwei": 50,
-                        "gas_wait_time": 60
                     }
-                }
-                await self.save_config()
+                    await self.save_config()
 
-                print("私钥导入完成！已自动配置主要链监控。")
+                    print(f"✅ 私钥导入完成！")
+                    print(f"✅ 已配置 {len(self.addresses)} 个地址监控")
+                    print(f"✅ 已配置 {len(chains_config)} 条链监控")
+                    print(f"✅ 接收地址: {recipient_address}")
+                    
+                except Exception as e:
+                    print(f"❌ 保存配置失败: {e}")
+                    logging.error(f"保存配置失败: {e}")
             else:
-                print("未找到有效私钥")
+                print("❌ 未找到有效私钥，请检查输入格式")
         else:
-            print("未输入任何内容")
+            print("❌ 未输入任何内容")
     
 async def main():
     """主函数"""
-    print("正在初始化EVM多链监控工具...")
+    print("🚀 正在初始化EVM多链监控工具...")
     
     app = MonitoringApp()
     
     try:
         await app.initialize()
-        print("初始化完成！")
+        print("✅ 初始化完成！")
+        
+        # 显示状态信息
+        print(f"📊 支持 {len(ChainConfig.SUPPORTED_CHAINS)} 条区块链")
+        if app.addresses:
+            print(f"📝 已加载 {len(app.addresses)} 个监控地址")
+        else:
+            print("📝 未加载监控地址，请先导入私钥")
         
         # 进入交互式菜单
         await app.show_interactive_menu()
         
     except Exception as e:
-        print(f"初始化失败: {e}")
+        print(f"❌ 初始化失败: {e}")
         logging.error(f"初始化失败: {e}")
         return 1
     
