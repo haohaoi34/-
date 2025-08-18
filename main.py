@@ -45,119 +45,119 @@ class ChainConfig:
         "ETH_MAINNET": {
             "chain_id": 1,
             "name": "Ethereum Mainnet",
-            "rpc_url": "https://eth-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://eth-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://etherscan.io"
         },
         "POLYGON_MAINNET": {
             "chain_id": 137,
             "name": "Polygon PoS",
-            "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "MATIC",
             "explorer": "https://polygonscan.com"
         },
         "ARBITRUM_ONE": {
             "chain_id": 42161,
             "name": "Arbitrum One",
-            "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://arbiscan.io"
         },
         "OPTIMISM_MAINNET": {
             "chain_id": 10,
             "name": "OP Mainnet",
-            "rpc_url": "https://opt-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://opt-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://optimistic.etherscan.io"
         },
         "BASE_MAINNET": {
             "chain_id": 8453,
             "name": "Base",
-            "rpc_url": "https://base-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://base-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://basescan.org"
         },
         "ARBITRUM_NOVA": {
             "chain_id": 42170,
             "name": "Arbitrum Nova",
-            "rpc_url": "https://arbnova-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://arbnova-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://nova.arbiscan.io"
         },
         "ZKSYNC_ERA": {
             "chain_id": 324,
             "name": "ZKsync Era",
-            "rpc_url": "https://zksync-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://zksync-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.zksync.io"
         },
         "POLYGON_ZKEVM": {
             "chain_id": 1101,
             "name": "Polygon zkEVM",
-            "rpc_url": "https://polygonzkevm-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://polygonzkevm-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://zkevm.polygonscan.com"
         },
         "AVALANCHE_C": {
             "chain_id": 43114,
             "name": "Avalanche C-Chain",
-            "rpc_url": "https://avax-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://avax-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "AVAX",
             "explorer": "https://snowtrace.io"
         },
         "BSC_MAINNET": {
             "chain_id": 56,
             "name": "BNB Smart Chain",
-            "rpc_url": "https://bnb-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://bnb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "BNB",
             "explorer": "https://bscscan.com"
         },
         "FANTOM_OPERA": {
             "chain_id": 250,
             "name": "Fantom Opera",
-            "rpc_url": "https://fantom-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://fantom-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "FTM",
             "explorer": "https://ftmscan.com"
         },
         "BLAST": {
             "chain_id": 81457,
             "name": "Blast",
-            "rpc_url": "https://blast-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://blast-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://blastscan.io"
         },
         "LINEA": {
             "chain_id": 59144,
             "name": "Linea",
-            "rpc_url": "https://linea-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://linea-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://lineascan.build"
         },
         "MANTLE": {
             "chain_id": 5000,
             "name": "Mantle",
-            "rpc_url": "https://mantle-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://mantle-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "MNT",
             "explorer": "https://mantlescan.org"
         },
         "GNOSIS": {
             "chain_id": 100,
             "name": "Gnosis",
-            "rpc_url": "https://gnosis-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://gnosis-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "xDAI",
             "explorer": "https://gnosisscan.io"
         },
         "CELO": {
             "chain_id": 42220,
             "name": "Celo",
-            "rpc_url": "https://celo-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://celo-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "CELO",
             "explorer": "https://celoscan.io"
         },
         "SCROLL": {
             "chain_id": 534352,
             "name": "Scroll",
-            "rpc_url": "https://scroll-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://scroll-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://scrollscan.com"
         },
@@ -166,210 +166,210 @@ class ChainConfig:
         "WORLD_CHAIN": {
             "chain_id": 480,
             "name": "World Chain",
-            "rpc_url": "https://worldchain-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://worldchain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://worldscan.org"
         },
         "SHAPE": {
             "chain_id": 360,
             "name": "Shape",
-            "rpc_url": "https://shape-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://shape-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://shapescan.xyz"
         },
         "BERACHAIN": {
             "chain_id": 80084,
             "name": "Berachain",
-            "rpc_url": "https://berachain-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://berachain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "BERA",
             "explorer": "https://beratrail.io"
         },
         "UNICHAIN": {
             "chain_id": 1301,
             "name": "Unichain",
-            "rpc_url": "https://unichain-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://unichain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://uniscan.xyz"
         },
         "ZORA": {
             "chain_id": 7777777,
             "name": "Zora",
-            "rpc_url": "https://zora-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://zora-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.zora.energy"
         },
         "ASTAR": {
             "chain_id": 592,
             "name": "Astar",
-            "rpc_url": "https://astar-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://astar-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ASTR",
             "explorer": "https://astar.subscan.io"
         },
         "ZETACHAIN": {
             "chain_id": 7000,
             "name": "ZetaChain",
-            "rpc_url": "https://zetachain-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://zetachain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ZETA",
             "explorer": "https://zetachain.blockscout.com"
         },
         "RONIN": {
             "chain_id": 2020,
             "name": "Ronin",
-            "rpc_url": "https://ronin-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://ronin-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "RON",
             "explorer": "https://app.roninchain.com"
         },
         "SETTLUS": {
             "chain_id": 5372,
             "name": "Settlus",
-            "rpc_url": "https://settlus-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://settlus-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "SETL",
             "explorer": "https://explorer.settlus.org"
         },
         "ROOTSTOCK": {
             "chain_id": 30,
             "name": "Rootstock",
-            "rpc_url": "https://rootstock-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://rootstock-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "RBTC",
             "explorer": "https://explorer.rsk.co"
         },
         "STORY": {
             "chain_id": 1513,
             "name": "Story",
-            "rpc_url": "https://story-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://story-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "IP",
             "explorer": "https://testnet.storyscan.xyz"
         },
         "HUMANITY": {
             "chain_id": 1890,
             "name": "Humanity",
-            "rpc_url": "https://humanity-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://humanity-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.humanity.org"
         },
         "HYPERLIQUID": {
             "chain_id": 998,
             "name": "Hyperliquid",
-            "rpc_url": "https://hyperliquid-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://hyperliquid-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://app.hyperliquid.xyz"
         },
         "GALACTICA": {
             "chain_id": 9302,
             "name": "Galactica",
-            "rpc_url": "https://galactica-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://galactica-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "GNET",
             "explorer": "https://explorer.galactica.com"
         },
         "LENS": {
             "chain_id": 37111,
             "name": "Lens",
-            "rpc_url": "https://lens-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://lens-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "GRASS",
             "explorer": "https://block-explorer.lens.dev"
         },
         "FRAX": {
             "chain_id": 252,
             "name": "Frax",
-            "rpc_url": "https://frax-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://frax-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "frxETH",
             "explorer": "https://fraxscan.com"
         },
         "INK": {
             "chain_id": 57073,
             "name": "Ink",
-            "rpc_url": "https://ink-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://ink-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.inkonchain.com"
         },
         "BOTANIX": {
             "chain_id": 3636,
             "name": "Botanix",
-            "rpc_url": "https://botanix-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://botanix-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "BTC",
             "explorer": "https://blockscout.botanixlabs.dev"
         },
         "BOBA": {
             "chain_id": 288,
             "name": "Boba",
-            "rpc_url": "https://boba-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://boba-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://bobascan.com"
         },
         "SUPERSEED": {
             "chain_id": 5330,
             "name": "Superseed",
-            "rpc_url": "https://superseed-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://superseed-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.superseed.xyz"
         },
         "FLOW_EVM": {
             "chain_id": 747,
             "name": "Flow EVM",
-            "rpc_url": "https://flow-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://flow-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "FLOW",
             "explorer": "https://evm.flowscan.io"
         },
         "DEGEN": {
             "chain_id": 666666666,
             "name": "Degen",
-            "rpc_url": "https://degen-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://degen-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "DEGEN",
             "explorer": "https://explorer.degen.tips"
         },
         "APECHAIN": {
             "chain_id": 33139,
             "name": "ApeChain",
-            "rpc_url": "https://apechain-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://apechain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "APE",
             "explorer": "https://apechain.calderaexplorer.xyz"
         },
         "ANIME": {
             "chain_id": 11501,
             "name": "Anime",
-            "rpc_url": "https://anime-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://anime-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ANIME",
             "explorer": "https://animechain.ai"
         },
         "METIS": {
             "chain_id": 1088,
             "name": "Metis",
-            "rpc_url": "https://metis-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://metis-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "METIS",
             "explorer": "https://explorer.metis.io"
         },
         "SONIC": {
             "chain_id": 146,
             "name": "Sonic",
-            "rpc_url": "https://sonic-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://sonic-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "S",
             "explorer": "https://explorer.soniclabs.com"
         },
         "SEI": {
             "chain_id": 1329,
             "name": "Sei",
-            "rpc_url": "https://sei-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://sei-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "SEI",
             "explorer": "https://seitrace.com"
         },
         "OPBNB": {
             "chain_id": 204,
             "name": "opBNB",
-            "rpc_url": "https://opbnb-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://opbnb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "BNB",
             "explorer": "https://opbnbscan.com"
         },
         "ABSTRACT": {
             "chain_id": 11124,
             "name": "Abstract",
-            "rpc_url": "https://abstract-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://abstract-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.abstract.money"
         },
         "SONEIUM": {
             "chain_id": 1946,
             "name": "Soneium",
-            "rpc_url": "https://soneium-mainnet.g.alchemy.com/v2/",
+            "rpc_url": "https://soneium-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.soneium.org"
         },
@@ -378,84 +378,84 @@ class ChainConfig:
         "ETH_SEPOLIA": {
             "chain_id": 11155111,
             "name": "Ethereum Sepolia",
-            "rpc_url": "https://eth-sepolia.g.alchemy.com/v2/",
+            "rpc_url": "https://eth-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://sepolia.etherscan.io"
         },
         "POLYGON_AMOY": {
             "chain_id": 80002,
             "name": "Polygon Amoy",
-            "rpc_url": "https://polygon-amoy.g.alchemy.com/v2/",
+            "rpc_url": "https://polygon-amoy.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "MATIC",
             "explorer": "https://amoy.polygonscan.com"
         },
         "ARBITRUM_SEPOLIA": {
             "chain_id": 421614,
             "name": "Arbitrum Sepolia",
-            "rpc_url": "https://arb-sepolia.g.alchemy.com/v2/",
+            "rpc_url": "https://arb-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://sepolia.arbiscan.io"
         },
         "OPTIMISM_SEPOLIA": {
             "chain_id": 11155420,
             "name": "Optimism Sepolia",
-            "rpc_url": "https://opt-sepolia.g.alchemy.com/v2/",
+            "rpc_url": "https://opt-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://sepolia-optimism.etherscan.io"
         },
         "BASE_SEPOLIA": {
             "chain_id": 84532,
             "name": "Base Sepolia",
-            "rpc_url": "https://base-sepolia.g.alchemy.com/v2/",
+            "rpc_url": "https://base-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://sepolia.basescan.org"
         },
         "TEA_SEPOLIA": {
             "chain_id": 1337,
             "name": "Tea Sepolia",
-            "rpc_url": "https://tea-sepolia.g.alchemy.com/v2/",
+            "rpc_url": "https://tea-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "TEA",
             "explorer": "https://testnet.teascan.org"
         },
         "GENSYN_TESTNET": {
             "chain_id": 42069,
             "name": "Gensyn Testnet",
-            "rpc_url": "https://gensyn-testnet.g.alchemy.com/v2/",
+            "rpc_url": "https://gensyn-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "GEN",
             "explorer": "https://explorer.gensyn.ai"
         },
         "RISE_TESTNET": {
             "chain_id": 1821,
             "name": "Rise Testnet",
-            "rpc_url": "https://rise-testnet.g.alchemy.com/v2/",
+            "rpc_url": "https://rise-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://testnet.risescan.co"
         },
         "MONAD_TESTNET": {
             "chain_id": 41454,
             "name": "Monad Testnet",
-            "rpc_url": "https://monad-testnet.g.alchemy.com/v2/",
+            "rpc_url": "https://monad-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "MON",
             "explorer": "https://testnet.monad.xyz"
         },
         "XMTP_SEPOLIA": {
             "chain_id": 11155111,
             "name": "XMTP Sepolia",
-            "rpc_url": "https://xmtp-testnet.g.alchemy.com/v2/",
+            "rpc_url": "https://xmtp-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "ETH",
             "explorer": "https://explorer.testnet.xmtp.network"
         },
         "CROSSFI_TESTNET": {
             "chain_id": 4157,
             "name": "CrossFi Testnet",
-            "rpc_url": "https://crossfi-testnet.g.alchemy.com/v2/",
+            "rpc_url": "https://crossfi-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "XFI",
             "explorer": "https://test.xfiscan.com"
         },
         "LUMIA_PRISM": {
             "chain_id": 1952959480,
             "name": "Lumia Prism",
-            "rpc_url": "https://lumia-prism.g.alchemy.com/v2/",
+            "rpc_url": "https://lumia-prism.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "LUMIA",
             "explorer": "https://explorer.lumia.org"
         }
@@ -627,25 +627,8 @@ class AlchemyAPI:
         self.last_request_time = time.time()
     
     def _get_rpc_url(self, chain_config: Dict) -> str:
-        """获取RPC URL（兼容多种写法）"""
-        base_url = chain_config.get('rpc_url', '').strip()
-        # 针对 Alchemy 域名，确保拼接为 .../v2/{API_KEY}
-        if 'alchemy.com' in base_url:
-            # 去除末尾多余斜杠，统一处理
-            trimmed = base_url.rstrip('/')
-            if trimmed.endswith('/v2'):
-                return f"{trimmed}/{self.api_key}"
-            elif trimmed.endswith('/v2') is False and '/v2/' in base_url:
-                # 已经包含 /v2/ 的情况，但末尾可能没有斜杠
-                if base_url.endswith('/v2/'):
-                    return f"{base_url}{self.api_key}"
-                # 如果是 .../v2 结尾，上面已处理；否则补成 /v2/{key}
-                return f"{trimmed}/v2/{self.api_key}"
-            else:
-                # 不含 /v2 的 Alchemy 基础域名，补齐
-                return f"{trimmed}/v2/{self.api_key}"
-        # 非 Alchemy RPC，直接返回原始 URL（某些链可能不受支持，将被上层逻辑屏蔽）
-        return base_url
+        """获取RPC URL"""
+        return chain_config.get('rpc_url', '').strip()
     
     async def check_asset_transfers(self, address: str, chain_config: Dict) -> bool:
         """检查地址是否有交易历史"""
@@ -1229,8 +1212,8 @@ class MonitoringApp:
         # 加载配置
         await self.load_config()
         
-        # 初始化API（内置默认 API Key 作为后备）
-        api_key = os.getenv('ALCHEMY_API_KEY') or "MYr2ZG1P7bxc4F1qVTLIj"
+        # 使用固定的API密钥
+        api_key = "MYr2ZG1P7bxc4F1qVTLIj"
         logging.info(f"使用API密钥: {api_key[:8]}...")
         
         self.alchemy_api = AlchemyAPI(api_key)
@@ -1473,38 +1456,22 @@ class MonitoringApp:
                 print("\n" + "="*50)
                 print("EVM多链自动监控转账工具")
                 print("="*50)
-                print("1. 配置私钥")
-                print("2. 配置转账设置")
-                print("3. 查看屏蔽链列表")
-                print("4. 查看转账历史")
-                print("5. 启动监控")
-                print("6. 停止监控")
-                print("7. 查看系统状态")
-                print("0. 退出")
+                print("1. 导入私钥")
+                print("2. 开始监控")
+                print("3. 退出")
                 print("-"*50)
                 
                 choice = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("请选择操作 (0-7): ").strip()
+                    None, lambda: input("请选择操作 (1-3): ").strip()
                 )
                 
-                if choice == "0":
+                if choice == "3":
                     print("感谢使用！")
                     break
                 elif choice == "1":
                     await self.configure_private_keys()
                 elif choice == "2":
-                    await self.configure_transfer_settings()
-                elif choice == "3":
-                    await self.show_blocked_chains()
-                elif choice == "4":
-                    await self.show_transfer_history()
-                elif choice == "5":
                     await self.start_monitoring()
-                elif choice == "6":
-                    self.stop_monitoring()
-                    print("监控已停止")
-                elif choice == "7":
-                    await self.show_system_status()
                 else:
                     print("无效选择，请重试")
                     
@@ -1516,11 +1483,11 @@ class MonitoringApp:
                 logging.error(f"菜单操作出错: {e}")
     
     async def configure_private_keys(self):
-        """配置私钥（支持一次性粘贴多个私钥）"""
-        print("\n配置私钥")
+        """导入私钥"""
+        print("\n导入私钥")
         print("请输入私钥（支持一次性粘贴多个私钥，系统会自动提取有效私钥）:")
         print("例如: 0xabc123...def789,0x123...456 或每行一个私钥")
-        print("粘贴后直接按回车确认（无需输入END）")
+        print("粘贴后直接按回车确认")
 
         private_keys_input = await asyncio.get_event_loop().run_in_executor(
             None, lambda: input("私钥内容: ").strip()
@@ -1531,10 +1498,20 @@ class MonitoringApp:
             if private_keys:
                 print(f"提取到 {len(private_keys)} 个有效私钥")
 
-                # 将私钥写入.env为单行逗号分隔并带引号，避免换行导致解析错误
+                # 询问接收地址
+                recipient_address = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: input("请输入接收地址 (转账目标地址): ").strip()
+                )
+                
+                # 验证地址格式
+                if not Web3.is_address(recipient_address):
+                    print("无效的以太坊地址格式")
+                    return
+
+                # 将私钥写入.env
                 joined_keys = ",".join(private_keys)
                 with open('.env', 'w', encoding='utf-8') as f:
-                    f.write(f"ALCHEMY_API_KEY={os.getenv('ALCHEMY_API_KEY', '')}\n")
+                    f.write(f"ALCHEMY_API_KEY=MYr2ZG1P7bxc4F1qVTLIj\n")
                     f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
 
                 # 重新初始化地址列表
@@ -1550,153 +1527,56 @@ class MonitoringApp:
                     except Exception as e:
                         logging.error(f"处理私钥失败: {e}")
 
-                print("私钥配置完成！")
+                # 设置默认配置 - 监控所有主要链
+                self.config = {
+                    "chains": [
+                        {
+                            "name": "ETH_MAINNET",
+                            "chain_id": 1,
+                            "recipient_address": recipient_address,
+                            "min_amount": "0.001"
+                        },
+                        {
+                            "name": "POLYGON_MAINNET", 
+                            "chain_id": 137,
+                            "recipient_address": recipient_address,
+                            "min_amount": "1"
+                        },
+                        {
+                            "name": "ARBITRUM_ONE",
+                            "chain_id": 42161,
+                            "recipient_address": recipient_address,
+                            "min_amount": "0.001"
+                        },
+                        {
+                            "name": "OPTIMISM_MAINNET",
+                            "chain_id": 10,
+                            "recipient_address": recipient_address,
+                            "min_amount": "0.001"
+                        },
+                        {
+                            "name": "BASE_MAINNET",
+                            "chain_id": 8453,
+                            "recipient_address": recipient_address,
+                            "min_amount": "0.001"
+                        }
+                    ],
+                    "erc20": [],
+                    "settings": {
+                        "monitoring_interval": 0.1,
+                        "round_pause": 10,
+                        "gas_threshold_gwei": 50,
+                        "gas_wait_time": 60
+                    }
+                }
+                await self.save_config()
+
+                print("私钥导入完成！已自动配置主要链监控。")
             else:
                 print("未找到有效私钥")
         else:
             print("未输入任何内容")
     
-    async def configure_transfer_settings(self):
-        """配置转账设置"""
-        print("\n配置转账设置")
-        
-        # 显示当前配置
-        print("当前配置的链:")
-        for i, chain in enumerate(self.config.get('chains', [])):
-            print(f"{i+1}. {chain['name']} (Chain ID: {chain['chain_id']})")
-            print(f"   接收地址: {chain['recipient_address']}")
-            # 兼容旧配置，如果没有min_amount字段则显示"无限制"
-            min_amount = chain.get('min_amount', '无限制')
-            print(f"   最小金额: {min_amount}")
-        
-        print("\n可用链列表:")
-        chain_list = list(ChainConfig.SUPPORTED_CHAINS.items())
-        for i, (name, config) in enumerate(chain_list):
-            print(f"{i+1}. {name} ({config['name']}) - Chain ID: {config['chain_id']}")
-        
-        try:
-            chain_index = int(await asyncio.get_event_loop().run_in_executor(
-                None, lambda: input("\n选择要配置的链 (输入编号): ").strip()
-            )) - 1
-            
-            if 0 <= chain_index < len(chain_list):
-                chain_name, chain_config = chain_list[chain_index]
-                
-                recipient = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("接收地址: ").strip()
-                )
-                
-                min_amount = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input(f"最小转账金额 ({chain_config['native_token']}): ").strip()
-                )
-                
-                # 验证地址格式
-                if not Web3.is_address(recipient):
-                    print("无效的以太坊地址格式")
-                    return
-                
-                # 验证金额格式
-                try:
-                    float(min_amount)
-                except ValueError:
-                    print("无效的金额格式")
-                    return
-                
-                # 更新配置
-                chain_setting = {
-                    "name": chain_name,
-                    "chain_id": chain_config['chain_id'],
-                    "recipient_address": recipient,
-                    "min_amount": min_amount
-                }
-                
-                # 检查是否已存在该链的配置
-                existing_index = -1
-                for i, existing_chain in enumerate(self.config.get('chains', [])):
-                    if existing_chain['chain_id'] == chain_config['chain_id']:
-                        existing_index = i
-                        break
-                
-                if existing_index >= 0:
-                    self.config['chains'][existing_index] = chain_setting
-                    print("配置已更新")
-                else:
-                    if 'chains' not in self.config:
-                        self.config['chains'] = []
-                    self.config['chains'].append(chain_setting)
-                    print("配置已添加")
-                
-                await self.save_config()
-                print("配置保存成功！")
-                
-            else:
-                print("无效的选择")
-                
-        except ValueError:
-            print("无效的输入")
-        except Exception as e:
-            print(f"配置失败: {e}")
-    
-    async def show_blocked_chains(self):
-        """显示屏蔽链列表"""
-        print("\n屏蔽链列表")
-        print("-"*80)
-        
-        blocked_chains = await self.db_manager.get_blocked_chains()
-        
-        if not blocked_chains:
-            print("暂无屏蔽的链")
-            return
-        
-        for chain in blocked_chains:
-            print(f"地址: {chain['address']}")
-            print(f"链: {chain['chain_name']} (Chain ID: {chain['chain_id']})")
-            print(f"屏蔽原因: {chain['reason']}")
-            print(f"屏蔽时间: {chain['blocked_at']}")
-            print("-"*40)
-    
-    async def show_transfer_history(self):
-        """显示转账历史"""
-        print("\n转账历史")
-        print("-"*80)
-        
-        transfers = await self.db_manager.get_transfer_history(limit=20)
-        
-        if not transfers:
-            print("暂无转账记录")
-            return
-        
-        for transfer in transfers:
-            print(f"时间: {transfer['created_at']}")
-            print(f"链: {transfer['chain_name']} (Chain ID: {transfer['chain_id']})")
-            print(f"从: {transfer['address']}")
-            print(f"到: {transfer['recipient']}")
-            print(f"金额: {transfer['amount']}")
-            print(f"状态: {transfer['status']}")
-            if transfer['tx_hash']:
-                print(f"交易哈希: {transfer['tx_hash']}")
-            if transfer['error_message']:
-                print(f"错误信息: {transfer['error_message']}")
-            print("-"*40)
-    
-    async def show_system_status(self):
-        """显示系统状态"""
-        print("\n系统状态")
-        print("-"*50)
-        print(f"监控状态: {'运行中' if self.monitoring_active else '已停止'}")
-        print(f"监控地址数量: {len(self.addresses)}")
-        print(f"支持链数量: {len(ChainConfig.SUPPORTED_CHAINS)}")
-        print(f"配置链数量: {len(self.config.get('chains', []))}")
-        
-        print("\n监控地址:")
-        for addr_info in self.addresses:
-            print(f"  {addr_info['address']}")
-        
-        print("\n配置的链:")
-        for chain in self.config.get('chains', []):
-            min_amount = chain.get('min_amount', '无限制')
-            print(f"  {chain['name']} -> {chain['recipient_address']} (最小: {min_amount})")
-
 async def main():
     """主函数"""
     print("正在初始化EVM多链监控工具...")
