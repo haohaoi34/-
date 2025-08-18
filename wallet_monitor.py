@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-钱包监控转账系统 v3.0 - 纯RPC网络版
+钱包监控转账系统 v4.0 - 一体化简化版
 支持多个EVM/L2链条的钱包监控和自动转账
 纯RPC网络架构，覆盖多条主流链条
 优化API速度和菜单交互体验，支持Base、Linea、Scroll、zkSync、BSC、AVAX等
+一体化设计：自动安装依赖、自动启动、无需其他文件
 """
 
 import os
@@ -1930,8 +1931,8 @@ class WalletMonitor:
             os.system('clear' if os.name == 'posix' else 'cls')
             
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v3.0 - 纯RPC网络支持版{Style.RESET_ALL}")
-            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 纯RPC模式 | 智能并发优化 | 人性化交互{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}🔐 钱包监控转账系统 v4.0 - 一体化简化版{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}支持{len(SUPPORTED_NETWORKS)}个EVM兼容链 | 纯RPC模式 | 一键启动 | 无需其他文件{Style.RESET_ALL}")
             print(f"{Fore.BLUE}{'='*80}{Style.RESET_ALL}")
             
             self.show_status()
@@ -1977,15 +1978,71 @@ class WalletMonitor:
                 print(f"{Fore.YELLOW}💡 程序将在3秒后继续，如持续出错请重启{Style.RESET_ALL}")
                 time.sleep(3)
 
-def main():
-    """主函数 - 自动启动"""
+def create_global_launcher():
+    """创建全局启动器命令"""
     try:
+        user_bin = os.path.expanduser("~/.local/bin")
+        os.makedirs(user_bin, exist_ok=True)
+        
+        launcher_path = os.path.join(user_bin, "jiankong")
+        current_file = os.path.abspath(__file__)
+        
+        with open(launcher_path, 'w') as f:
+            f.write(f"""#!/bin/bash
+# 钱包监控系统全局启动器
+cd "$(dirname "{current_file}")"
+python3 "{current_file}" "$@"
+""")
+        
+        os.chmod(launcher_path, 0o755)
+        
+        # 添加到PATH
+        bashrc_path = os.path.expanduser("~/.bashrc")
+        path_line = 'export PATH="$HOME/.local/bin:$PATH"'
+        
+        try:
+            with open(bashrc_path, 'r') as f:
+                content = f.read()
+            if path_line not in content:
+                with open(bashrc_path, 'a') as f:
+                    f.write(f'\n{path_line}\n')
+        except:
+            pass
+            
+        print(f"{Fore.GREEN}✅ 全局命令 'jiankong' 创建成功{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}💡 重新登录后可在任意目录运行 'jiankong' 启动程序{Style.RESET_ALL}")
+        
+    except Exception as e:
+        print(f"{Fore.YELLOW}⚠️ 全局命令创建失败: {e}{Style.RESET_ALL}")
+
+def show_welcome_banner():
+    """显示欢迎横幅"""
+    print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}🔐 钱包监控转账系统 v4.0 - 一体化简化版{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}支持46+个EVM兼容链 | 纯RPC模式 | 智能并发优化 | 一键启动{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+    print()
+
+def main():
+    """主函数 - 一体化启动"""
+    try:
+        # 显示欢迎信息
+        show_welcome_banner()
+        
         print(f"{Fore.CYAN}🚀 正在启动钱包监控系统...{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}✨ 自动进入主菜单模式{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✨ 一体化设计，无需其他文件{Style.RESET_ALL}")
+        
+        # 创建全局启动器
+        create_global_launcher()
+        
+        print(f"{Fore.CYAN}🔧 初始化系统组件...{Style.RESET_ALL}")
         time.sleep(1)
         
         monitor = WalletMonitor()
         monitor.initialize_clients()
+        
+        print(f"{Fore.GREEN}🎯 进入主菜单...{Style.RESET_ALL}")
+        time.sleep(1)
         
         # 自动进入主菜单
         monitor.main_menu()
@@ -1999,5 +2056,5 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    # 自动启动主程序
+    # 一体化启动主程序
     main()
