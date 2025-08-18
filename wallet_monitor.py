@@ -1023,6 +1023,12 @@ class WalletMonitor:
         
         while True:
             try:
+                if not sys.stdin.isatty():
+                    print(f"\n{Fore.YELLOW}🤖 检测到非交互式环境，无法导入私钥{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}💡 请在交互式终端中运行或将私钥保存到文件中{Style.RESET_ALL}")
+                    time.sleep(3)
+                    return
+                
                 line = input()
                 if line.strip().lower() in ['q', 'quit', 'exit']:
                     print(f"\n{Fore.YELLOW}🔙 返回主菜单{Style.RESET_ALL}")
@@ -1948,6 +1954,18 @@ class WalletMonitor:
             print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
             
             try:
+                # 检测是否为交互式环境
+                if not sys.stdin.isatty():
+                    print(f"\n{Fore.YELLOW}🤖 检测到非交互式环境，自动进入监控模式...{Style.RESET_ALL}")
+                    if not self.wallets:
+                        print(f"{Fore.RED}❌ 没有导入的钱包，无法启动监控{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}💡 请先导入私钥或在交互式环境中运行{Style.RESET_ALL}")
+                        break
+                    else:
+                        print(f"{Fore.GREEN}🎯 自动启动监控系统...{Style.RESET_ALL}")
+                        asyncio.run(self.start_monitoring())
+                        break
+                
                 choice = input(f"{Fore.CYAN}请选择功能 (1-5): {Style.RESET_ALL}").strip()
                 
                 if choice == "1":
@@ -1973,6 +1991,15 @@ class WalletMonitor:
             except KeyboardInterrupt:
                 print(f"\n\n{Fore.GREEN}👋 感谢使用钱包监控系统！{Style.RESET_ALL}")
                 print(f"{Fore.CYAN}💾 数据已保存{Style.RESET_ALL}")
+                break
+            except EOFError:
+                print(f"\n{Fore.YELLOW}🤖 检测到EOF，可能在非交互式环境中运行{Style.RESET_ALL}")
+                if not self.wallets:
+                    print(f"{Fore.RED}❌ 没有导入的钱包，程序退出{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}💡 请在交互式环境中运行并导入私钥{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.GREEN}🎯 自动启动监控系统...{Style.RESET_ALL}")
+                    asyncio.run(self.start_monitoring())
                 break
             except Exception as e:
                 print(f"\n{Fore.RED}❌ 系统错误: {e}{Style.RESET_ALL}")
@@ -2027,6 +2054,17 @@ def show_welcome_banner():
 def main():
     """主函数 - 一体化启动"""
     try:
+        # 检查命令行参数
+        auto_monitor = '--auto' in sys.argv or '--monitor' in sys.argv
+        show_help = '--help' in sys.argv or '-h' in sys.argv
+        
+        if show_help:
+            print(f"{Fore.CYAN}钱包监控系统 v4.0 使用帮助:{Style.RESET_ALL}")
+            print(f"  python3 wallet_monitor.py        # 交互式模式")
+            print(f"  python3 wallet_monitor.py --auto # 自动监控模式")
+            print(f"  python3 wallet_monitor.py --help # 显示帮助")
+            return
+        
         # 显示欢迎信息
         show_welcome_banner()
         
@@ -2042,11 +2080,20 @@ def main():
         monitor = WalletMonitor()
         monitor.initialize_clients()
         
-        print(f"{Fore.GREEN}🎯 进入主菜单...{Style.RESET_ALL}")
-        time.sleep(1)
-        
-        # 自动进入主菜单
-        monitor.main_menu()
+        # 根据参数决定启动模式
+        if auto_monitor:
+            print(f"{Fore.GREEN}🤖 自动监控模式启动...{Style.RESET_ALL}")
+            if not monitor.wallets:
+                print(f"{Fore.RED}❌ 没有导入的钱包，无法启动监控{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}💡 请先在交互式模式中导入私钥{Style.RESET_ALL}")
+                sys.exit(1)
+            else:
+                asyncio.run(monitor.start_monitoring())
+        else:
+            print(f"{Fore.GREEN}🎯 进入主菜单...{Style.RESET_ALL}")
+            time.sleep(1)
+            # 自动进入主菜单
+            monitor.main_menu()
         
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}👋 程序已退出{Style.RESET_ALL}")
