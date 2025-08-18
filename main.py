@@ -1030,6 +1030,7 @@ class AlchemyAPI:
             oldest_timestamp = min(timestamp for timestamp, _ in self.request_history) if self.request_history else current_time
             wait_time = 1.0 - (current_time - oldest_timestamp) + 0.005  # 减少额外等待时间，提升速度
             if wait_time > 0:
+                print_info(f"🚦 API限频等待 {wait_time:.3f}s (当前: {current_cu_usage}/{self.target_cu_per_second} CU/s)")
                 await asyncio.sleep(wait_time)
                 current_time = time.time()
                 # 重新清理请求记录
@@ -1041,6 +1042,9 @@ class AlchemyAPI:
         # 记录当前请求
         self.request_history.append((current_time, cu_cost))
         self.last_request_time = current_time
+        
+        # 更新当前速率
+        self.current_cu_rate = sum(cu for _, cu in self.request_history)
         
         # 更新当前速率统计
         self.current_cu_rate = sum(cu for _, cu in self.request_history)
@@ -2072,13 +2076,13 @@ class MonitoringApp:
     async def scan_transaction_history(self):
         """第二步：扫描交易记录并屏蔽无交易记录的链（超高速版）"""
         print_chain("📜 扫描链上交易记录...")
-        print_success(f"🚀 超高速模式：目标1秒10次扫描，批量并发处理")
+        print_success(f"🚀 优化模式：每批1个地址，每次最多10条链并发扫描")
         
         total_scanned = 0
         blocked_count = 0
         
-        # 批量并发处理 - 每批处理10个地址
-        batch_size = 10
+        # 批量并发处理 - 每批处理1个地址（降低并发压力）
+        batch_size = 1
         address_batches = [self.addresses[i:i + batch_size] for i in range(0, len(self.addresses), batch_size)]
         
         for batch_index, address_batch in enumerate(address_batches):
@@ -2110,42 +2114,82 @@ class MonitoringApp:
         scanned = 0
         blocked = 0
         
-        # 并发处理这个地址的所有链
-        chain_tasks = []
-        for chain_setting in self.config['chains']:
-            chain_config = None
-            for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
-                if supported_config['chain_id'] == chain_setting['chain_id']:
-                    chain_config = supported_config
-                    break
+        try:
+            print_info(f"🔍 开始扫描地址: {address[:8]}...{address[-6:]}")
             
-            if chain_config:
-                task = self.scan_single_chain(address, chain_config)
-                chain_tasks.append(task)
-        
-        # 并发执行所有链的扫描
-        chain_results = await asyncio.gather(*chain_tasks, return_exceptions=True)
-        
-        # 统计结果
-        valid_chains = 0
-        for result in chain_results:
-            if isinstance(result, tuple):
-                has_history, transfer_count, chain_name = result
-                scanned += 1
-                if not has_history:
+            # 限制并发处理链数量 - 每次最多10条链
+            all_chain_configs = []
+            
+            for chain_setting in self.config['chains']:
+                chain_config = None
+                for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                    if supported_config['chain_id'] == chain_setting['chain_id']:
+                        chain_config = supported_config
+                        break
+                
+                if chain_config:
+                    all_chain_configs.append(chain_config)
+            
+            print_info(f"📋 地址 {address[:8]}... 将分批扫描 {len(all_chain_configs)} 条链")
+            
+            # 分批处理链，每批10条
+            chain_batch_size = 10
+            chain_batches = [all_chain_configs[i:i + chain_batch_size] for i in range(0, len(all_chain_configs), chain_batch_size)]
+            
+            all_chain_results = []
+            
+            for chain_batch_index, chain_batch in enumerate(chain_batches):
+                print_info(f"🔗 扫描第 {chain_batch_index + 1}/{len(chain_batches)} 批链 ({len(chain_batch)} 条)")
+                
+                # 并发处理这一批链
+                chain_tasks = []
+                for chain_config in chain_batch:
+                    task = self.scan_single_chain(address, chain_config)
+                    chain_tasks.append(task)
+                
+                # 使用超时保护，避免卡死
+                try:
+                    batch_results = await asyncio.wait_for(
+                        asyncio.gather(*chain_tasks, return_exceptions=True),
+                        timeout=30.0  # 30秒超时
+                    )
+                    all_chain_results.extend(batch_results)
+                except asyncio.TimeoutError:
+                    print_error(f"⏰ 第 {chain_batch_index + 1} 批链扫描超时")
+                    # 超时的链都标记为失败
+                    timeout_results = [(False, 0, config['name']) for config in chain_batch]
+                    all_chain_results.extend(timeout_results)
+            
+            chain_results = all_chain_results
+            valid_chain_configs = all_chain_configs
+            
+            # 统计结果
+            valid_chains = 0
+            for i, result in enumerate(chain_results):
+                if isinstance(result, tuple):
+                    has_history, transfer_count, chain_name = result
+                    scanned += 1
+                    if not has_history:
+                        blocked += 1
+                    else:
+                        valid_chains += 1
+                elif isinstance(result, Exception):
+                    print_warning(f"链扫描异常 {valid_chain_configs[i]['name']}: {result}")
+                    scanned += 1
                     blocked += 1
-                else:
-                    valid_chains += 1
-            elif isinstance(result, Exception):
-                print_warning(f"链扫描异常: {result}")
-        
-        # 显示地址扫描结果
-        if valid_chains > 0:
-            print_success(f"✅ {address[:8]}...{address[-6:]}: {valid_chains} 个有效链")
-        else:
-            print_warning(f"⚠️ {address[:8]}...{address[-6:]}: 无有效链")
-        
-        return scanned, blocked
+            
+            # 显示地址扫描结果
+            if valid_chains > 0:
+                print_success(f"✅ {address[:8]}...{address[-6:]}: {valid_chains} 个有效链 / {scanned} 总链")
+            else:
+                print_warning(f"⚠️ {address[:8]}...{address[-6:]}: 无有效链 / {scanned} 总链")
+            
+            return scanned, blocked
+            
+        except Exception as e:
+            print_error(f"❌ 扫描地址 {address[:8]}... 出错: {e}")
+            # 返回默认值，避免程序崩溃
+            return len(self.config.get('chains', [])), len(self.config.get('chains', []))
     
     async def scan_single_chain(self, address, chain_config):
         """扫描单个地址在单条链上的交易历史"""
@@ -2155,19 +2199,32 @@ class MonitoringApp:
             if cache_key in self.blocked_chains_cache:
                 return False, 0, chain_config['name']
             
-            # 检查交易历史
-            has_history, transfer_count = await self.alchemy_api.check_asset_transfers(address, chain_config)
-            
-            if not has_history:
-                # 异步屏蔽链
-                asyncio.create_task(self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id']))
+            # 添加超时保护的API调用
+            try:
+                has_history, transfer_count = await asyncio.wait_for(
+                    self.alchemy_api.check_asset_transfers(address, chain_config),
+                    timeout=30.0  # 30秒超时
+                )
+                
+                if not has_history:
+                    # 异步屏蔽链
+                    asyncio.create_task(self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id']))
+                    self.blocked_chains_cache.add(cache_key)
+                    return False, 0, chain_config['name']
+                else:
+                    print_success(f"✅ {chain_config['name']}: 发现 {transfer_count}+ 条记录")
+                    return True, transfer_count, chain_config['name']
+                    
+            except asyncio.TimeoutError:
+                print_error(f"⏰ {chain_config['name']} API调用超时")
+                # 超时的链也标记为屏蔽，避免重复尝试
                 self.blocked_chains_cache.add(cache_key)
                 return False, 0, chain_config['name']
-            else:
-                return True, transfer_count, chain_config['name']
                 
         except Exception as e:
-            print_warning(f"扫描链 {chain_config['name']} 异常: {e}")
+            print_error(f"❌ 扫描链 {chain_config['name']} 异常: {e}")
+            import traceback
+            print_warning(f"详细错误: {traceback.format_exc()}")
             return False, 0, chain_config['name']
     
     async def monitoring_loop(self):
