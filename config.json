@@ -1,0 +1,308 @@
+{
+  "chains": [
+    {
+      "name": "ETH_MAINNET",
+      "chain_id": 1,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "以太坊主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "POLYGON_MAINNET", 
+      "chain_id": 137,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Polygon主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ARBITRUM_ONE",
+      "chain_id": 42161,
+      "recipient_address": "0x0000000000000000000000000000000000000000", 
+      "comment": "Arbitrum One - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "OPTIMISM_MAINNET",
+      "chain_id": 10,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Optimism主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BASE_MAINNET",
+      "chain_id": 8453,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Base主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BSC_MAINNET",
+      "chain_id": 56,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "BNB Smart Chain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "AVALANCHE_C",
+      "chain_id": 43114,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Avalanche C-Chain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ARBITRUM_NOVA",
+      "chain_id": 42170,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Arbitrum Nova - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ZKSYNC_ERA",
+      "chain_id": 324,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "ZKsync Era - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "POLYGON_ZKEVM",
+      "chain_id": 1101,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Polygon zkEVM - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "FANTOM_OPERA",
+      "chain_id": 250,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Fantom Opera - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BLAST",
+      "chain_id": 81457,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Blast - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "LINEA",
+      "chain_id": 59144,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Linea - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "MANTLE",
+      "chain_id": 5000,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Mantle - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "GNOSIS",
+      "chain_id": 100,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Gnosis - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "CELO",
+      "chain_id": 42220,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Celo - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "SCROLL",
+      "chain_id": 534352,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Scroll - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "WORLD_CHAIN",
+      "chain_id": 480,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "World Chain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "SHAPE",
+      "chain_id": 360,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Shape - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BERACHAIN",
+      "chain_id": 80084,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Berachain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "UNICHAIN",
+      "chain_id": 1301,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Unichain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ZORA",
+      "chain_id": 7777777,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Zora - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ASTAR",
+      "chain_id": 592,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Astar - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ZETACHAIN",
+      "chain_id": 7000,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "ZetaChain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "RONIN",
+      "chain_id": 2020,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Ronin - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "APECHAIN",
+      "chain_id": 33139,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "ApeChain - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ANIME",
+      "chain_id": 11501,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Anime - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "METIS",
+      "chain_id": 1088,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Metis - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "SONIC",
+      "chain_id": 146,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Sonic - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "SEI",
+      "chain_id": 1329,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Sei - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "OPBNB",
+      "chain_id": 204,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "opBNB - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ABSTRACT",
+      "chain_id": 11124,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Abstract - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "SONEIUM",
+      "chain_id": 1946,
+      "recipient_address": "0x0000000000000000000000000000000000000000",
+      "comment": "Soneium - 全代币转账，无最低金额限制"
+    }
+  ],
+  "erc20": [
+    {
+      "chain": "ETH_MAINNET",
+      "contract_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+      "symbol": "USDT",
+      "decimals": 6,
+      "comment": "以太坊主网上的USDT代币 - 全量转账，无最低金额限制"
+    },
+    {
+      "chain": "ETH_MAINNET", 
+      "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "symbol": "USDC",
+      "decimals": 6,
+      "comment": "以太坊主网上的USDC代币 - 全量转账，无最低金额限制"
+    },
+    {
+      "chain": "POLYGON_MAINNET",
+      "contract_address": "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+      "symbol": "USDT",
+      "decimals": 6, 
+      "comment": "Polygon主网上的USDT代币 - 全量转账，无最低金额限制"
+    },
+    {
+      "chain": "BSC_MAINNET",
+      "contract_address": "0x55d398326f99059fF775485246999027B3197955",
+      "symbol": "USDT",
+      "decimals": 18,
+      "comment": "BSC主网上的USDT代币 - 全量转账，无最低金额限制"
+    },
+    {
+      "chain": "ARBITRUM_ONE",
+      "contract_address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+      "symbol": "USDT",
+      "decimals": 6,
+      "comment": "Arbitrum One上的USDT代币 - 全量转账，无最低金额限制"
+    }
+  ],
+  "settings": {
+    "monitoring_interval": 0.1,
+    "round_pause": 60,
+    "gas_threshold_gwei": 50,
+    "gas_wait_time": 60,
+    "max_gas_price_gwei": 100,
+    "retry_count": 3,
+    "retry_delay": 5,
+    "enable_native_tokens": true,
+    "enable_erc20_tokens": true,
+    "comment": "监控设置说明：monitoring_interval-查询间隔(秒)，round_pause-轮询暂停(秒)，无最低转账金额限制，支持原生代币和ERC-20代币转账"
+  },
+  "notifications": {
+    "discord_enabled": false,
+    "discord_webhook_url": "",
+    "telegram_enabled": false,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "email_enabled": false,
+    "email_smtp_server": "",
+    "email_port": 587,
+    "email_username": "",
+    "email_password": "",
+    "email_to": "",
+    "comment": "通知设置，可配置Discord、Telegram或邮件通知"
+  },
+  "security": {
+    "enable_whitelist": false,
+    "recipient_whitelist": [],
+    "max_daily_amount": "10.0",
+    "enable_amount_limit": false,
+    "comment": "安全设置：enable_whitelist-启用白名单，max_daily_amount-每日最大转账金额"
+  },
+  "advanced": {
+    "enable_smart_gas": true,
+    "gas_optimization": true,
+    "batch_transactions": false,
+    "use_flashloan": false,
+    "enable_mev_protection": false,
+    "comment": "高级设置：智能gas、批量交易、闪电贷等功能（实验性）"
+  },
+  "_metadata": {
+    "version": "1.0.0",
+    "created_at": "2024-01-01T00:00:00Z",
+    "last_updated": "2024-01-01T00:00:00Z",
+    "config_schema_version": "1.0",
+    "comment": "配置文件元数据，请勿手动修改"
+  },
+  "_instructions": {
+    "setup": [
+      "1. 将recipient_address改为您的实际接收地址",
+      "2. 根据需要调整min_amount最小转账金额",
+      "3. 在.env文件中配置ALCHEMY_API_KEY和PRIVATE_KEYS",
+      "4. 可选：配置Discord/Telegram通知",
+      "5. 建议先在测试网测试功能"
+    ],
+    "security_tips": [
+      "• 请妥善保管私钥，不要泄露给任何人",
+      "• 建议使用专门的监控钱包，不要使用主钱包",
+      "• 启用白名单功能以增加安全性",
+      "• 设置合理的每日转账限额",
+      "• 定期备份配置文件和数据库"
+    ],
+    "supported_chains": [
+      "主网：ETH, Polygon, Arbitrum, Optimism, Base, BSC, Avalanche, Fantom, ZKsync Era, Blast, Celo, Gnosis, Mantle, Linea",
+      "测试网：Sepolia, Polygon Amoy, Arbitrum Sepolia, Optimism Sepolia, Base Sepolia",
+      "注意：某些链的Chain ID需要通过Alchemy文档或Chainlist.org确认"
+    ]
+  }
+}
