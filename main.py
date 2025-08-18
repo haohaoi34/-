@@ -16,7 +16,17 @@ from typing import Dict, List, Optional, Tuple
 import aiosqlite
 import requests
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+try:
+    # 尝试旧版本导入
+    from web3.middleware import geth_poa_middleware
+except ImportError:
+    try:
+        # 尝试新版本导入
+        from web3.middleware.geth_poa import geth_poa_middleware
+    except ImportError:
+        # 如果都导入失败，创建一个空的中间件函数
+        def geth_poa_middleware(w3):
+            return w3
 from eth_account import Account
 from prompt_toolkit import prompt
 from prompt_toolkit.shortcuts import yes_no_dialog, message_dialog
@@ -866,7 +876,17 @@ class TransferManager:
             
             # 为某些链添加POA中间件
             if chain_config['chain_id'] in [56, 137, 250, 43114]:  # BSC, Polygon, Fantom, Avalanche
-                web3.middleware_onion.inject(geth_poa_middleware, layer=0)
+                try:
+                    # 尝试新版本的中间件注入方式
+                    if callable(geth_poa_middleware):
+                        if hasattr(web3.middleware_onion, 'inject'):
+                            web3.middleware_onion.inject(geth_poa_middleware, layer=0)
+                        else:
+                            # 兼容更新的版本
+                            web3.middleware_onion.add(geth_poa_middleware)
+                except Exception as e:
+                    logging.warning(f"POA中间件注入失败: {e}")
+                    # 继续执行，不影响主要功能
             
             self.web3_instances[chain_name] = web3
         
