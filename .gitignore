@@ -1,0 +1,64 @@
+# 环境变量文件（包含敏感信息）
+.env
+*.env
+
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志文件
+logs/
+*.log
+
+# 备份文件
+*.backup
+*.bak
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试覆盖率
+.coverage
+htmlcov/
+
+# 分发构建
+build/
+dist/
+*.egg-info/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# 私钥文件
+private_keys.txt
+keys.txt
+wallet.json
+
+# 配置备份
+config.backup.json
+.env.backup
