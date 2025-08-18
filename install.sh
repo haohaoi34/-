@@ -72,16 +72,25 @@ check_python() {
     # 尝试安装Python
     print_info "尝试安装Python 3.10+..."
     
+    # 根据用户权限选择安装方式
+    if [[ $EUID -eq 0 ]]; then
+        # root用户直接安装
+        SUDO_CMD=""
+    else
+        # 普通用户使用sudo
+        SUDO_CMD="sudo"
+    fi
+    
     if [[ "$OS" == "linux" ]]; then
         if command -v apt-get &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y python3.10 python3.10-pip python3.10-venv
+            $SUDO_CMD apt-get update
+            $SUDO_CMD apt-get install -y python3.10 python3.10-pip python3.10-venv
             PYTHON_CMD="python3.10"
         elif command -v yum &> /dev/null; then
-            sudo yum install -y python3.10 python3.10-pip
+            $SUDO_CMD yum install -y python3.10 python3.10-pip
             PYTHON_CMD="python3.10"
         elif command -v dnf &> /dev/null; then
-            sudo dnf install -y python3.10 python3.10-pip
+            $SUDO_CMD dnf install -y python3.10 python3.10-pip
             PYTHON_CMD="python3.10"
         else
             print_error "无法自动安装Python，请手动安装Python 3.10+"
@@ -110,13 +119,20 @@ check_pip() {
     if ! $PYTHON_CMD -m pip --version &> /dev/null; then
         print_info "安装pip..."
         
+        # 根据用户权限选择安装方式
+        if [[ $EUID -eq 0 ]]; then
+            SUDO_CMD=""
+        else
+            SUDO_CMD="sudo"
+        fi
+        
         if [[ "$OS" == "linux" ]]; then
             if command -v apt-get &> /dev/null; then
-                sudo apt-get install -y python3-pip
+                $SUDO_CMD apt-get install -y python3-pip
             elif command -v yum &> /dev/null; then
-                sudo yum install -y python3-pip
+                $SUDO_CMD yum install -y python3-pip
             elif command -v dnf &> /dev/null; then
-                sudo dnf install -y python3-pip
+                $SUDO_CMD dnf install -y python3-pip
             fi
         fi
         
@@ -139,13 +155,20 @@ check_git() {
     if ! command -v git &> /dev/null; then
         print_info "安装Git..."
         
+        # 根据用户权限选择安装方式
+        if [[ $EUID -eq 0 ]]; then
+            SUDO_CMD=""
+        else
+            SUDO_CMD="sudo"
+        fi
+        
         if [[ "$OS" == "linux" ]]; then
             if command -v apt-get &> /dev/null; then
-                sudo apt-get install -y git
+                $SUDO_CMD apt-get install -y git
             elif command -v yum &> /dev/null; then
-                sudo yum install -y git
+                $SUDO_CMD yum install -y git
             elif command -v dnf &> /dev/null; then
-                sudo dnf install -y git
+                $SUDO_CMD dnf install -y git
             fi
         elif [[ "$OS" == "macos" ]]; then
             if command -v brew &> /dev/null; then
@@ -369,6 +392,12 @@ show_completion() {
     print_success "  EVM多链监控工具安装完成！"
     print_success "=============================================="
     echo
+    print_info "安装信息："
+    echo "  • 操作系统: $DISTRO"
+    echo "  • Python版本: $($PYTHON_CMD --version)"
+    echo "  • 用户权限: $(if [[ $EUID -eq 0 ]]; then echo "管理员(root)"; else echo "普通用户"; fi)"
+    echo "  • 安装路径: $(pwd)"
+    echo
     print_info "下一步操作："
     echo "  1. 配置私钥和转账设置"
     echo "  2. 启动监控程序"
@@ -388,6 +417,7 @@ show_completion() {
     echo "  • 建议先在测试网测试后再使用主网"
     echo "  • 请妥善保管您的私钥，不要泄露给他人"
     echo "  • 程序会自动屏蔽无交易历史的链以节省资源"
+    echo "  • 支持所有用户权限运行，包括root用户"
     echo
     print_info "获取帮助："
     echo "  • GitHub: https://github.com/haohaoi34/jiankong"
@@ -416,14 +446,11 @@ main() {
     echo "=============================================="
     echo
     
-    # 检查root权限警告
+    # 检查用户权限信息（仅显示，不阻止）
     if [[ $EUID -eq 0 ]]; then
-        print_warning "检测到root权限，建议使用普通用户运行"
-        read -p "是否继续？(y/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
+        print_info "检测到root权限，正在以管理员身份运行"
+    else
+        print_info "检测到普通用户权限，正在以用户身份运行"
     fi
     
     # 执行安装步骤
