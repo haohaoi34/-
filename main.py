@@ -2352,23 +2352,38 @@ class MonitoringApp:
         print_info("- 单个私钥: 0xabc123...def789")
         print_info("- 多个私钥: 0xabc123...def789,0x123...456")
         print_info("- 每行一个私钥（支持多行粘贴）")
-        print_info("- 输入 'END' 结束多行输入")
+        print_info("- 输入 'end' 结束输入（区分大小写）")
+        print_warning("⚠️  注意：只有输入 'end' 才能结束，不支持双击回车结束")
 
-        # 支持多行输入
+        # 支持连续多行输入，直到输入 'end' 为止
         lines = []
-        print_progress("请输入私钥内容:")
+        print_progress("请输入私钥内容（输入 'end' 结束）:")
         
         try:
+            line_count = 0
             while True:
-                line = input().strip()
-                if line.upper() == 'END':
+                try:
+                    line = input(f"第{line_count + 1}行> ").strip()
+                except EOFError:
+                    print_info("检测到EOF，继续等待输入...")
+                    continue
+                
+                # 只有输入 'end' 才结束
+                if line == 'end':
+                    print_success("检测到结束标记 'end'，开始处理输入...")
                     break
-                if line:
-                    lines.append(line)
-                if not line:  # 空行也结束输入
-                    break
-        except EOFError:
-            pass
+                
+                # 即使是空行也添加到lines中，不会结束输入
+                lines.append(line)
+                line_count += 1
+                
+                # 显示当前已输入的行数
+                if line_count % 5 == 0:
+                    print_info(f"已输入 {line_count} 行，输入 'end' 结束")
+                    
+        except KeyboardInterrupt:
+            print_warning("输入被中断")
+            return
         except Exception as e:
             print_error(f"输入错误: {e}")
             return
@@ -2645,6 +2660,111 @@ class MonitoringApp:
             print_warning(f"从数据库加载私钥失败: {e}")
         
         return False
+    
+    async def show_interactive_menu(self):
+        """显示交互式主菜单"""
+        while True:
+            try:
+                print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}{Back.BLUE} 🚀 EVM多链监控工具 - 主菜单 {Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+                
+                # 显示当前状态
+                if self.addresses:
+                    print_success(f"✅ 已配置 {len(self.addresses)} 个监控地址")
+                else:
+                    print_warning("⚠️  未配置监控地址")
+                
+                if self.alchemy_api:
+                    # 显示API使用统计
+                    usage_stats = self.alchemy_api.get_usage_stats()
+                    cache_stats = self.price_checker.get_cache_stats()
+                    print_info(f"📊 API状态:")
+                    print_info(f"   Alchemy: {usage_stats.get('current_cu_rate', 0)}/450 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)")
+                    print_info(f"   CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)")
+                    print_info(f"   价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计")
+                
+                print(f"\n{Fore.YELLOW}请选择操作:{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}1.{Style.RESET_ALL} 📥 导入私钥")
+                print(f"{Fore.GREEN}2.{Style.RESET_ALL} 🚀 开始监控")
+                print(f"{Fore.GREEN}3.{Style.RESET_ALL} 📊 查看统计")
+                print(f"{Fore.GREEN}0.{Style.RESET_ALL} 🚪 退出程序")
+                
+                try:
+                    choice = input(f"\n{Fore.CYAN}请输入选择 (0-3): {Style.RESET_ALL}").strip()
+                except EOFError:
+                    print_warning("检测到EOF，退出程序")
+                    break
+                
+                if choice == '1':
+                    await self.configure_private_keys()
+                elif choice == '2':
+                    if not self.addresses:
+                        print_error("请先导入私钥！")
+                        continue
+                    await self.start_monitoring()
+                elif choice == '3':
+                    await self.show_statistics()
+                elif choice == '0':
+                    print_success("退出程序")
+                    break
+                else:
+                    print_error("无效选择，请输入 0-3")
+                    
+            except KeyboardInterrupt:
+                print_warning("\n程序被中断，正在退出...")
+                break
+            except Exception as e:
+                print_error(f"菜单操作出错: {e}")
+                logging.error(f"菜单操作出错: {e}")
+    
+    async def show_statistics(self):
+        """显示详细统计信息"""
+        print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+        print(f"{Fore.WHITE}{Back.BLUE} 📊 系统统计信息 {Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+        
+        # 地址统计
+        print(f"{Fore.YELLOW}📍 地址配置:{Style.RESET_ALL}")
+        print(f"   监控地址数量: {len(self.addresses)}")
+        if self.addresses:
+            for i, addr_info in enumerate(self.addresses, 1):
+                print(f"   {i}. {addr_info['address']}")
+        
+        # 链配置统计
+        if self.config.get('chains'):
+            print(f"\n{Fore.YELLOW}🔗 链配置:{Style.RESET_ALL}")
+            print(f"   配置链数量: {len(self.config['chains'])}")
+        
+        # API使用统计
+        if self.alchemy_api:
+            usage_stats = self.alchemy_api.get_usage_stats()
+            print(f"\n{Fore.YELLOW}⚡ Alchemy API:{Style.RESET_ALL}")
+            print(f"   当前速率: {usage_stats.get('current_cu_rate', 0)} CU/s")
+            print(f"   月度使用: {usage_stats.get('monthly_usage', 0):,} / {usage_stats.get('monthly_limit', 0):,} CU")
+            print(f"   使用百分比: {usage_stats.get('usage_percentage', 0):.1f}%")
+            print(f"   每日预算: {usage_stats.get('daily_budget', 0):,} CU")
+            print(f"   剩余天数: {usage_stats.get('days_remaining', 0)} 天")
+        
+        # CoinGecko统计
+        cache_stats = self.price_checker.get_cache_stats()
+        print(f"\n{Fore.YELLOW}💎 CoinGecko API:{Style.RESET_ALL}")
+        print(f"   月度调用: {cache_stats.get('monthly_calls', 0)} / {cache_stats.get('monthly_limit', 10000)}")
+        print(f"   分钟调用: {cache_stats.get('minute_calls', 0)} / {cache_stats.get('minute_limit', 30)}")
+        print(f"   价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计")
+        print(f"   缓存时长: 3天")
+        
+        # 转账统计
+        print(f"\n{Fore.YELLOW}💸 转账统计:{Style.RESET_ALL}")
+        print(f"   总转账数: {self.total_transfers} 笔")
+        print(f"   总价值: ${self.total_value_usd:.2f}")
+        print(f"   监控轮次: {self.round_count}")
+        
+        print(f"\n{Fore.GREEN}按回车键返回主菜单...{Style.RESET_ALL}")
+        try:
+            input()
+        except EOFError:
+            pass
     
 async def main():
     """主函数"""
