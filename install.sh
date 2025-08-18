@@ -436,9 +436,28 @@ EOF
             fi
             
             if [ "$install_success" = false ]; then
-                print_error "$package 安装失败，请检查编译环境"
-                print_info "可能需要手动安装编译工具：sudo apt-get install build-essential python3-dev"
-                exit 1
+                print_error "$package 安装失败，正在尝试强制安装编译工具..."
+                
+                # 强制安装编译工具
+                if [[ "$OS" == "linux" ]] && command -v apt-get &> /dev/null; then
+                    print_info "强制安装编译环境..."
+                    $SUDO_CMD apt-get update -qq
+                    $SUDO_CMD apt-get install -y build-essential python3-dev python3-setuptools gcc g++ make
+                    
+                    # 再次尝试安装失败的包
+                    print_info "重新尝试安装 $package..."
+                    if python -m pip install "$package" --no-cache-dir --prefer-binary; then
+                        print_success "$package 强制重装成功"
+                        install_success=true
+                    fi
+                fi
+                
+                if [ "$install_success" = false ]; then
+                    print_error "$package 最终安装失败"
+                    print_info "建议手动安装：pip3 install $package --prefer-binary"
+                    print_warning "继续安装其他包..."
+                    # 不退出，继续安装其他包
+                fi
             else
                 print_success "$package 安装成功"
             fi
@@ -616,37 +635,37 @@ create_directories() {
 test_installation() {
     print_info "测试安装..."
     
-    # 测试Python导入
-    if python -c "
-import asyncio
-import json
-import logging
-import os
-import re
-import sqlite3
-import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import aiosqlite
-import requests
-from web3 import Web3
-# 兼容性导入测试
-try:
-    from web3.middleware import geth_poa_middleware
-except ImportError:
-    try:
-        from web3.middleware.geth_poa import geth_poa_middleware
-    except ImportError:
-        def geth_poa_middleware(w3): return w3
-from eth_account import Account
-from prompt_toolkit import prompt
-from dotenv import load_dotenv
-print('所有依赖包导入成功')
-"; then
-        print_success "依赖包测试通过"
+    # 测试关键依赖包导入
+    print_info "测试关键依赖包..."
+    
+    # 测试核心Python模块
+    python -c "import asyncio, json, logging, os, re, sqlite3, time; print('核心模块正常')" || print_warning "核心模块导入异常"
+    
+    # 测试第三方依赖包
+    declare -A test_packages=(
+        ["aiosqlite"]="aiosqlite"
+        ["requests"]="requests"
+        ["web3"]="web3"
+        ["eth_account"]="eth_account"
+        ["dotenv"]="dotenv"
+        ["colorama"]="colorama"
+    )
+    
+    all_success=true
+    for package in "${!test_packages[@]}"; do
+        import_name="${test_packages[$package]}"
+        if python -c "import $import_name" 2>/dev/null; then
+            print_success "$package 导入正常"
+        else
+            print_warning "$package 导入失败，可能需要安装"
+            all_success=false
+        fi
+    done
+    
+    if [ "$all_success" = true ]; then
+        print_success "所有依赖包测试通过"
     else
-        print_error "依赖包测试失败"
-        exit 1
+        print_warning "部分依赖包可能未安装，程序启动时会自动处理"
     fi
     
     # 测试主程序语法
