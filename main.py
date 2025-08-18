@@ -1157,21 +1157,39 @@ class MonitoringApp:
         )
     
     def extract_private_keys(self, private_keys_input: str) -> List[str]:
-        """从输入文本中提取私钥"""
-        # 匹配64位十六进制字符串（私钥格式）
-        private_key_pattern = r'\b[a-fA-F0-9]{64}\b'
+        """从输入文本中提取私钥
+        支持 0x 前缀与不带前缀的64位十六进制，去重并验证有效性
+        """
+        # 同时匹配 0x 前缀和无前缀的私钥片段
+        private_key_pattern = r'(?:0x)?[a-fA-F0-9]{64}'
         matches = re.findall(private_key_pattern, private_keys_input)
-        
-        valid_keys = []
+
+        normalized_keys: List[str] = []
         for key in matches:
+            # 统一为0x前缀小写格式
+            key_clean = key.lower()
+            if not key_clean.startswith('0x'):
+                key_clean = '0x' + key_clean
+            normalized_keys.append(key_clean)
+
+        # 去重且保持顺序
+        seen = set()
+        unique_keys = []
+        for key in normalized_keys:
+            if key not in seen:
+                seen.add(key)
+                unique_keys.append(key)
+
+        valid_keys: List[str] = []
+        for key in unique_keys:
             try:
                 # 验证私钥有效性
                 account = Account.from_key(key)
                 valid_keys.append(key)
                 logging.info(f"提取到有效私钥，对应地址: {account.address}")
             except Exception as e:
-                logging.warning(f"无效私钥 {key[:8]}...: {e}")
-        
+                logging.warning(f"无效私钥 {key[:10]}...: {e}")
+
         return valid_keys
     
     async def initialize(self):
@@ -1468,25 +1486,42 @@ class MonitoringApp:
                 logging.error(f"菜单操作出错: {e}")
     
     async def configure_private_keys(self):
-        """配置私钥"""
+        """配置私钥（支持多行粘贴，输入 END 完成）"""
         print("\n配置私钥")
-        print("请输入私钥（支持混合文本，系统会自动提取有效私钥）:")
-        print("例如: abc123...your_private_key_here...xyz789")
-        
+        print("请输入私钥（支持多行粘贴，系统会自动提取有效私钥）:")
+        print("例如: 0xabc... 或 64位十六进制，无需逗号分隔")
+        print("输入 'END' 后回车完成输入")
+
+        def read_multiline_input() -> str:
+            lines: List[str] = []
+            while True:
+                try:
+                    line = input()
+                except EOFError:
+                    break
+                if line is None:
+                    break
+                stripped = line.strip()
+                if stripped.upper() == 'END':
+                    break
+                lines.append(line)
+            return "\n".join(lines)
+
         private_keys_input = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: input("私钥内容: ").strip()
+            None, read_multiline_input
         )
-        
-        if private_keys_input:
+
+        if private_keys_input and private_keys_input.strip():
             private_keys = self.extract_private_keys(private_keys_input)
             if private_keys:
                 print(f"提取到 {len(private_keys)} 个有效私钥")
-                
-                # 更新.env文件
+
+                # 将私钥写入.env为单行逗号分隔并带引号，避免换行导致解析错误
+                joined_keys = ",".join(private_keys)
                 with open('.env', 'w', encoding='utf-8') as f:
                     f.write(f"ALCHEMY_API_KEY={os.getenv('ALCHEMY_API_KEY', '')}\n")
-                    f.write(f"PRIVATE_KEYS={private_keys_input}\n")
-                
+                    f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
+
                 # 重新初始化地址列表
                 self.addresses = []
                 for private_key in private_keys:
@@ -1499,7 +1534,7 @@ class MonitoringApp:
                         print(f"地址: {account.address}")
                     except Exception as e:
                         logging.error(f"处理私钥失败: {e}")
-                
+
                 print("私钥配置完成！")
             else:
                 print("未找到有效私钥")
