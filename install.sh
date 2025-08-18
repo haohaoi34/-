@@ -336,7 +336,7 @@ MAIN_EOF
     # 创建requirements.txt
     if [[ ! -f "requirements.txt" ]]; then
         cat > requirements.txt << 'REQ_EOF'
-web3>=6.0.0
+web3>=6.0.0,<7.0.0
 prompt-toolkit>=3.0.0
 aiosqlite>=0.19.0
 requests>=2.28.0
@@ -441,7 +441,14 @@ from typing import Dict, List, Optional, Tuple
 import aiosqlite
 import requests
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+# 兼容性导入测试
+try:
+    from web3.middleware import geth_poa_middleware
+except ImportError:
+    try:
+        from web3.middleware.geth_poa import geth_poa_middleware
+    except ImportError:
+        def geth_poa_middleware(w3): return w3
 from eth_account import Account
 from prompt_toolkit import prompt
 from dotenv import load_dotenv
