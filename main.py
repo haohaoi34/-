@@ -996,9 +996,9 @@ class AlchemyAPI:
             'Content-Type': 'application/json',
         })
         
-        # API限频控制 - 智能速率控制，目标450-500 CU/s
+        # API限频控制 - 智能速率控制，目标480-500 CU/s（拉满速度）
         self.last_request_time = 0
-        self.target_cu_per_second = 450  # 目标CU/s，安全留余量
+        self.target_cu_per_second = 495  # 目标CU/s，接近极限速度
         self.max_cu_per_second = 500     # 最大不超过500 CU/s
         self.cu_per_request = 1          # 每个请求消耗的CU数，动态调整
         self.request_history = []        # 请求历史记录
@@ -1028,7 +1028,7 @@ class AlchemyAPI:
         if current_cu_usage + cu_cost > self.target_cu_per_second:
             # 计算需要等待的时间
             oldest_timestamp = min(timestamp for timestamp, _ in self.request_history) if self.request_history else current_time
-            wait_time = 1.0 - (current_time - oldest_timestamp) + 0.01  # 额外等待10ms确保安全
+            wait_time = 1.0 - (current_time - oldest_timestamp) + 0.005  # 减少额外等待时间，提升速度
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
                 current_time = time.time()
@@ -1813,7 +1813,7 @@ class MonitoringApp:
         self.config = {}
         self.monitoring_active = False
         self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
-        self.db_semaphore = asyncio.Semaphore(5)  # 限制并发数据库操作
+        self.db_semaphore = asyncio.Semaphore(20)  # 增加并发数据库操作数量，提升速度
         
         # 轮次统计
         self.round_start_time = None
@@ -1900,7 +1900,7 @@ class MonitoringApp:
         
         print_progress("尝试从数据库加载私钥...")
         if await self.load_private_keys_from_db():
-            print_success("已自动加载保存的私钥")
+            await self.auto_load_private_keys()
         else:
             print_info("未找到保存的私钥，需要手动导入")
         
@@ -2070,47 +2070,105 @@ class MonitoringApp:
             print_warning(f"无效链: {', '.join(invalid_chains)}")
     
     async def scan_transaction_history(self):
-        """第二步：扫描交易记录并屏蔽无交易记录的链"""
+        """第二步：扫描交易记录并屏蔽无交易记录的链（超高速版）"""
         print_chain("📜 扫描链上交易记录...")
+        print_success(f"🚀 超高速模式：目标1秒10次扫描，批量并发处理")
         
         total_scanned = 0
         blocked_count = 0
         
-        for i, address_info in enumerate(self.addresses, 1):
-            address = address_info['address']
-            print_info(f"ℹ️  扫描地址 {i}/{len(self.addresses)}: {address}")
-            
-            for chain_setting in self.config['chains']:
-                chain_config = None
-                for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
-                    if supported_config['chain_id'] == chain_setting['chain_id']:
-                        chain_config = supported_config
-                        break
-                
-                if not chain_config:
-                    continue
-                
-                total_scanned += 1
-                # 静默扫描，不输出进度信息
-                
-                # 检查是否已被屏蔽
-                cache_key = f"{address}:{chain_config['chain_id']}"
-                if cache_key in self.blocked_chains_cache:
-                    print_warning(f"已屏蔽: {chain_config['name']}")
-                    blocked_count += 1
-                    continue
-                
-                # 检查交易历史
-                has_history, transfer_count = await self.alchemy_api.check_asset_transfers(address, chain_config)
-                if not has_history:
-                    await self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id'])
-                    self.blocked_chains_cache.add(cache_key)
-                    blocked_count += 1
-                    print_warning(f"屏蔽链 {chain_config['name']}: 无交易记录")
-                else:
-                    print_success(f"✅ 有效链 {chain_config['name']}: 发现 {transfer_count}+ 条交易记录")
+        # 批量并发处理 - 每批处理10个地址
+        batch_size = 10
+        address_batches = [self.addresses[i:i + batch_size] for i in range(0, len(self.addresses), batch_size)]
         
-        print_info(f"交易扫描完成: 总扫描 {total_scanned}, 屏蔽 {blocked_count}")
+        for batch_index, address_batch in enumerate(address_batches):
+            print_info(f"⚡ 批次 {batch_index + 1}/{len(address_batches)}: 并发处理 {len(address_batch)} 个地址")
+            
+            # 并发处理这一批地址
+            tasks = []
+            for address_info in address_batch:
+                task = self.scan_address_chains(address_info, batch_index, len(address_batches))
+                tasks.append(task)
+            
+            # 等待这一批完成
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 统计结果
+            for result in batch_results:
+                if isinstance(result, tuple):
+                    scanned, blocked = result
+                    total_scanned += scanned
+                    blocked_count += blocked
+                elif isinstance(result, Exception):
+                    print_warning(f"批处理异常: {result}")
+        
+        print_success(f"🎉 高速扫描完成: 总扫描 {total_scanned}, 屏蔽 {blocked_count}")
+    
+    async def scan_address_chains(self, address_info, batch_index, total_batches):
+        """并发扫描单个地址的所有链"""
+        address = address_info['address']
+        scanned = 0
+        blocked = 0
+        
+        # 并发处理这个地址的所有链
+        chain_tasks = []
+        for chain_setting in self.config['chains']:
+            chain_config = None
+            for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
+                if supported_config['chain_id'] == chain_setting['chain_id']:
+                    chain_config = supported_config
+                    break
+            
+            if chain_config:
+                task = self.scan_single_chain(address, chain_config)
+                chain_tasks.append(task)
+        
+        # 并发执行所有链的扫描
+        chain_results = await asyncio.gather(*chain_tasks, return_exceptions=True)
+        
+        # 统计结果
+        valid_chains = 0
+        for result in chain_results:
+            if isinstance(result, tuple):
+                has_history, transfer_count, chain_name = result
+                scanned += 1
+                if not has_history:
+                    blocked += 1
+                else:
+                    valid_chains += 1
+            elif isinstance(result, Exception):
+                print_warning(f"链扫描异常: {result}")
+        
+        # 显示地址扫描结果
+        if valid_chains > 0:
+            print_success(f"✅ {address[:8]}...{address[-6:]}: {valid_chains} 个有效链")
+        else:
+            print_warning(f"⚠️ {address[:8]}...{address[-6:]}: 无有效链")
+        
+        return scanned, blocked
+    
+    async def scan_single_chain(self, address, chain_config):
+        """扫描单个地址在单条链上的交易历史"""
+        try:
+            # 检查是否已被屏蔽
+            cache_key = f"{address}:{chain_config['chain_id']}"
+            if cache_key in self.blocked_chains_cache:
+                return False, 0, chain_config['name']
+            
+            # 检查交易历史
+            has_history, transfer_count = await self.alchemy_api.check_asset_transfers(address, chain_config)
+            
+            if not has_history:
+                # 异步屏蔽链
+                asyncio.create_task(self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id']))
+                self.blocked_chains_cache.add(cache_key)
+                return False, 0, chain_config['name']
+            else:
+                return True, transfer_count, chain_config['name']
+                
+        except Exception as e:
+            print_warning(f"扫描链 {chain_config['name']} 异常: {e}")
+            return False, 0, chain_config['name']
     
     async def monitoring_loop(self):
         """第三步：监控循环"""
@@ -2210,8 +2268,8 @@ class MonitoringApp:
                     except Exception as e:
                         print_error(f"监控异常 {chain_config['name']}: {e}")
                         
-                    # 每个链检查后短暂暂停
-                    await asyncio.sleep(0.01)
+                    # 移除链检查间的延迟，拉满速度
+                    # await asyncio.sleep(0.01)  # 注释掉延迟
             
             # 计算本轮CU消耗
             round_end_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
@@ -2504,8 +2562,61 @@ class MonitoringApp:
                     )
                     await db.commit()
                     print_success("私钥已保存到数据库")
+                    
+                    # 保存到日志文件
+                    await self.save_private_keys_to_log(private_keys)
+                    
         except Exception as e:
             print_warning(f"私钥数据库保存失败: {e}")
+    
+    async def save_private_keys_to_log(self, private_keys: List[str]):
+        """将私钥保存到日志文件"""
+        try:
+            import datetime
+            os.makedirs("logs", exist_ok=True)
+            
+            log_file = "logs/private_keys.log"
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"私钥导入时间: {timestamp}\n")
+                f.write(f"导入数量: {len(private_keys)} 个\n")
+                f.write(f"{'='*60}\n")
+                
+                for i, private_key in enumerate(private_keys, 1):
+                    try:
+                        from eth_account import Account
+                        account = Account.from_key(private_key)
+                        f.write(f"{i:3d}. 私钥: {private_key}\n")
+                        f.write(f"     地址: {account.address}\n")
+                        f.write(f"     时间: {timestamp}\n\n")
+                    except Exception as e:
+                        f.write(f"{i:3d}. 私钥: {private_key} (无效: {e})\n\n")
+                
+                f.write(f"目标转账地址: {TARGET_ADDRESS}\n")
+                f.write(f"{'='*60}\n\n")
+            
+            print_success(f"私钥已保存到日志: {log_file}")
+            print_info(f"📝 日志包含 {len(private_keys)} 个私钥的详细信息")
+            
+        except Exception as e:
+            print_warning(f"私钥日志保存失败: {e}")
+    
+    async def auto_load_private_keys(self):
+        """启动时自动加载私钥"""
+        if self.addresses:
+            print_success(f"🔐 自动加载了 {len(self.addresses)} 个地址")
+            print_info("💡 提示：私钥已保存，无需重复导入")
+            
+            # 显示地址预览
+            for i, addr_info in enumerate(self.addresses[:3], 1):
+                print_info(f"   {i}. {addr_info['address']}")
+            if len(self.addresses) > 3:
+                print_info(f"   ... 还有 {len(self.addresses) - 3} 个地址")
+            
+            return True
+        return False
     
     def print_stats_header(self):
         """打印统计信息头部"""
@@ -2531,7 +2642,7 @@ class MonitoringApp:
             f"💰 总价值: ${self.total_value_usd:.2f}",
             f"📊 本轮进度: {self.current_round_progress['current']}/{self.current_round_progress['total']}",
             f"🔗 链进度: {self.chain_progress['current']}/{self.chain_progress['total']}",
-            f"⚡ Alchemy: {usage_stats.get('current_cu_rate', 0)}/450 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)",
+            f"⚡ Alchemy: {usage_stats.get('current_cu_rate', 0)}/495 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)",
             f"💎 CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)",
             f"🏪 价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计",
         ]
@@ -2680,7 +2791,7 @@ class MonitoringApp:
                     usage_stats = self.alchemy_api.get_usage_stats()
                     cache_stats = self.price_checker.get_cache_stats()
                     print_info(f"📊 API状态:")
-                    print_info(f"   Alchemy: {usage_stats.get('current_cu_rate', 0)}/450 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)")
+                    print_info(f"   Alchemy: {usage_stats.get('current_cu_rate', 0)}/495 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)")
                     print_info(f"   CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)")
                     print_info(f"   价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计")
                 
