@@ -463,6 +463,7 @@ class DatabaseManager:
     
     def __init__(self, db_path: str = "monitoring.db"):
         self.db_path = db_path
+        self._lock = asyncio.Lock()  # 添加异步锁防止并发访问
     
     async def init_database(self):
         """初始化数据库"""
@@ -523,48 +524,52 @@ class DatabaseManager:
     
     async def is_chain_blocked(self, address: str, chain_id: int) -> bool:
         """检查链是否被屏蔽"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM blocked_chains WHERE address = ? AND chain_id = ?",
-                (address, chain_id)
-            )
-            result = await cursor.fetchone()
-            return result is not None
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT 1 FROM blocked_chains WHERE address = ? AND chain_id = ?",
+                    (address, chain_id)
+                )
+                result = await cursor.fetchone()
+                return result is not None
     
     async def block_chain(self, address: str, chain_name: str, chain_id: int, reason: str = "No transaction history"):
         """屏蔽链"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT OR IGNORE INTO blocked_chains 
-                   (address, chain_name, chain_id, reason) VALUES (?, ?, ?, ?)""",
-                (address, chain_name, chain_id, reason)
-            )
-            await db.commit()
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """INSERT OR IGNORE INTO blocked_chains 
+                       (address, chain_name, chain_id, reason) VALUES (?, ?, ?, ?)""",
+                    (address, chain_name, chain_id, reason)
+                )
+                await db.commit()
     
     async def log_transfer(self, address: str, chain_name: str, chain_id: int, 
                           amount: str, recipient: str, tx_hash: str = None, 
                           gas_used: str = None, gas_price: str = None, 
                           status: str = "pending", error_message: str = None):
         """记录转账"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO transfers 
-                   (address, chain_name, chain_id, amount, recipient, tx_hash, 
-                    gas_used, gas_price, status, error_message) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (address, chain_name, chain_id, amount, recipient, tx_hash, 
-                 gas_used, gas_price, status, error_message)
-            )
-            await db.commit()
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """INSERT INTO transfers 
+                       (address, chain_name, chain_id, amount, recipient, tx_hash, 
+                        gas_used, gas_price, status, error_message) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (address, chain_name, chain_id, amount, recipient, tx_hash, 
+                     gas_used, gas_price, status, error_message)
+                )
+                await db.commit()
     
     async def log_message(self, level: str, message: str, address: str = None, chain_name: str = None):
         """记录日志消息"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO logs (level, message, address, chain_name) VALUES (?, ?, ?, ?)",
-                (level, message, address, chain_name)
-            )
-            await db.commit()
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "INSERT INTO logs (level, message, address, chain_name) VALUES (?, ?, ?, ?)",
+                    (level, message, address, chain_name)
+                )
+                await db.commit()
     
     async def get_blocked_chains(self, address: str = None) -> List[Dict]:
         """获取屏蔽链列表"""
@@ -881,23 +886,42 @@ class TransferManager:
         
         if chain_name not in self.web3_instances:
             rpc_url = self.alchemy_api._get_rpc_url(chain_config)
-            web3 = Web3(Web3.HTTPProvider(rpc_url))
             
-            # 为某些链添加POA中间件
-            if chain_config['chain_id'] in [56, 137, 250, 43114]:  # BSC, Polygon, Fantom, Avalanche
+            try:
+                # 创建HTTP提供者，设置超时
+                provider = Web3.HTTPProvider(
+                    rpc_url,
+                    request_kwargs={'timeout': 30}
+                )
+                web3 = Web3(provider)
+                
+                # 为某些链添加POA中间件
+                if chain_config['chain_id'] in [56, 137, 250, 43114]:  # BSC, Polygon, Fantom, Avalanche
+                    try:
+                        # 尝试新版本的中间件注入方式
+                        if callable(geth_poa_middleware):
+                            if hasattr(web3.middleware_onion, 'inject'):
+                                web3.middleware_onion.inject(geth_poa_middleware, layer=0)
+                            else:
+                                # 兼容更新的版本
+                                web3.middleware_onion.add(geth_poa_middleware)
+                    except Exception as e:
+                        logging.debug(f"POA中间件注入失败: {e}")
+                        # 继续执行，不影响主要功能
+                
+                # 测试连接
                 try:
-                    # 尝试新版本的中间件注入方式
-                    if callable(geth_poa_middleware):
-                        if hasattr(web3.middleware_onion, 'inject'):
-                            web3.middleware_onion.inject(geth_poa_middleware, layer=0)
-                        else:
-                            # 兼容更新的版本
-                            web3.middleware_onion.add(geth_poa_middleware)
+                    web3.is_connected()
                 except Exception as e:
-                    logging.warning(f"POA中间件注入失败: {e}")
-                    # 继续执行，不影响主要功能
-            
-            self.web3_instances[chain_name] = web3
+                    logging.debug(f"Web3连接测试失败 {chain_name}: {e}")
+                
+                self.web3_instances[chain_name] = web3
+                
+            except Exception as e:
+                logging.error(f"创建Web3实例失败 {chain_name}: {e}")
+                # 创建一个基本的Web3实例作为后备
+                web3 = Web3(Web3.HTTPProvider(rpc_url))
+                self.web3_instances[chain_name] = web3
         
         return self.web3_instances[chain_name]
     
@@ -1064,14 +1088,25 @@ class TransferManager:
                 amount_raw = int(token_info['balance'] * (10 ** token_info['decimals']))
                 
                 # 构建交易数据
-                transaction_data = contract.functions.transfer(
-                    Web3.to_checksum_address(to_address),
-                    amount_raw
-                ).build_transaction({
-                    'chainId': chain_config['chain_id'],
-                    'gas': 100000,  # ERC-20转账的gas limit
-                    'nonce': nonce,
-                })
+                try:
+                    transaction_data = contract.functions.transfer(
+                        Web3.to_checksum_address(to_address),
+                        amount_raw
+                    ).build_transaction({
+                        'chainId': chain_config['chain_id'],
+                        'gas': 100000,  # ERC-20转账的gas limit
+                        'nonce': nonce,
+                    })
+                except AttributeError:
+                    # 兼容不同版本的Web3
+                    transaction_data = contract.functions.transfer(
+                        Web3.to_checksum_address(to_address),
+                        amount_raw
+                    ).buildTransaction({
+                        'chainId': chain_config['chain_id'],
+                        'gas': 100000,
+                        'nonce': nonce,
+                    })
                 
                 # 获取gas价格
                 gas_data = await self.alchemy_api.get_gas_price(chain_config)
@@ -1151,6 +1186,7 @@ class MonitoringApp:
         self.config = {}
         self.monitoring_active = False
         self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
+        self.db_semaphore = asyncio.Semaphore(5)  # 限制并发数据库操作
         self.setup_logging()
     
     def setup_logging(self):
@@ -1305,9 +1341,10 @@ class MonitoringApp:
                 return
             
             # 检查数据库中是否已屏蔽
-            if await self.db_manager.is_chain_blocked(address, chain_config['chain_id']):
-                self.blocked_chains_cache.add(cache_key)
-                return
+            async with self.db_semaphore:
+                if await self.db_manager.is_chain_blocked(address, chain_config['chain_id']):
+                    self.blocked_chains_cache.add(cache_key)
+                    return
             
             # 检查链是否被屏蔽或不受支持
             if not await self.check_chain_history(address, chain_config):
@@ -1404,8 +1441,16 @@ class MonitoringApp:
                     await self.db_manager.log_message("ERROR", f"转账错误: {transfer_error}", address, chain_config['name'])
             
         except Exception as e:
-            logging.error(f"监控地址 {address} 在链 {chain_config['name']} 时出错: {e}")
-            await self.db_manager.log_message("ERROR", f"监控错误: {e}", address, chain_config['name'])
+            error_msg = str(e)
+            if "database is locked" in error_msg:
+                logging.debug(f"数据库暂时锁定 {chain_config['name']} (地址: {address})")
+            else:
+                logging.error(f"监控地址 {address} 在链 {chain_config['name']} 时出错: {e}")
+                # 避免在数据库锁定时记录日志，防止更多锁定
+                try:
+                    await self.db_manager.log_message("ERROR", f"监控错误: {e}", address, chain_config['name'])
+                except:
+                    pass  # 静默处理数据库错误
     
     async def send_discord_notification(self, message: str):
         """发送Discord通知（占位实现）"""
@@ -1475,14 +1520,21 @@ class MonitoringApp:
                             task = self.monitor_address_chain(address_info, chain_config)
                             tasks.append(task)
                 
-                # 分批执行监控任务以提高速度
+                # 分批执行监控任务，减少并发防止数据库锁定
                 if tasks:
-                    batch_size = 50  # 每批50个任务
+                    batch_size = 10  # 减少批次大小防止数据库锁定
                     total_success = 0
                     total_errors = 0
                     
+                    print(f"📊 总共 {len(tasks)} 个监控任务，分 {(len(tasks) + batch_size - 1) // batch_size} 批执行")
+                    
                     for i in range(0, len(tasks), batch_size):
                         batch_tasks = tasks[i:i + batch_size]
+                        batch_num = (i // batch_size) + 1
+                        total_batches = (len(tasks) + batch_size - 1) // batch_size
+                        
+                        print(f"🔄 执行第 {batch_num}/{total_batches} 批任务...")
+                        
                         results = await asyncio.gather(*batch_tasks, return_exceptions=True)
                         
                         # 统计结果
@@ -1491,17 +1543,20 @@ class MonitoringApp:
                         for result in results:
                             if isinstance(result, Exception):
                                 batch_errors += 1
+                                logging.debug(f"批次任务错误: {result}")
                             else:
                                 batch_success += 1
                         
                         total_success += batch_success
                         total_errors += batch_errors
                         
-                        # 批次间短暂暂停
+                        print(f"  ✅ 批次完成: {batch_success} 成功, {batch_errors} 错误")
+                        
+                        # 批次间暂停，防止API过载和数据库锁定
                         if i + batch_size < len(tasks):
-                            await asyncio.sleep(0.1)
+                            await asyncio.sleep(0.5)
                     
-                    print(f"✅ 第 {round_count} 轮监控完成: {total_success} 成功, {total_errors} 错误")
+                    print(f"🎉 第 {round_count} 轮监控完成: {total_success} 成功, {total_errors} 错误")
                 
                 # 轮询间隔
                 monitoring_interval = self.config.get('settings', {}).get('monitoring_interval', 0.1)
