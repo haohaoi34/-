@@ -85,7 +85,7 @@ except ImportError as e:
 
 # 配置
 ALCHEMY_API_KEY = "MYr2ZG1P7bxc4F1qVTLIj"
-TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf"
+DEFAULT_TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf"
 
 def validate_ethereum_address(address: str) -> bool:
     """验证以太坊地址格式"""
@@ -103,10 +103,33 @@ def validate_ethereum_address(address: str) -> bool:
     except:
         return False
 
-# 验证目标地址
+def resolve_target_address() -> str:
+    """从环境变量或配置文件解析目标地址，最后回退默认值"""
+    # 1) 环境变量优先
+    env_addr = os.getenv('TARGET_ADDRESS')
+    if env_addr and isinstance(env_addr, str) and env_addr.strip():
+        return env_addr.strip()
+    
+    # 2) 配置文件 config.json
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            cfg_addr = cfg.get('target_address')
+            if cfg_addr and isinstance(cfg_addr, str) and cfg_addr.strip():
+                return cfg_addr.strip()
+        except Exception:
+            pass
+    
+    # 3) 回退默认值
+    return DEFAULT_TARGET_ADDRESS
+
+# 解析并验证目标地址
+TARGET_ADDRESS = resolve_target_address()
 if not validate_ethereum_address(TARGET_ADDRESS):
-    print(f"❌ 错误: TARGET_ADDRESS 格式无效: {TARGET_ADDRESS}")
+    print(f"❌ 错误: 目标地址格式无效: {TARGET_ADDRESS}")
     print(f"💡 正确格式应该是: 0x + 40个十六进制字符")
+    print(f"💡 可通过设置环境变量 TARGET_ADDRESS 或在 config.json 中设置 target_address 来指定")
     sys.exit(1)
 
 # 数据文件
