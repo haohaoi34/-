@@ -2,6 +2,7 @@
 
 # EVM多链自动监控转账工具 - 一键安装脚本
 # GitHub: https://github.com/haohaoi34/jiankong
+# Version: 2.0 - 内置配置版本
 
 set -e  # 遇到错误立即退出
 
@@ -33,9 +34,20 @@ print_error() {
 check_os() {
     print_info "检查操作系统..."
     
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ -f /etc/os-release ]]; then
         OS="linux"
-        DISTRO=$(lsb_release -si 2>/dev/null || echo "Unknown")
+        # 尝试多种方式检测发行版
+        if command -v lsb_release &> /dev/null; then
+            DISTRO=$(lsb_release -si 2>/dev/null)
+        elif [[ -f /etc/os-release ]]; then
+            DISTRO=$(grep '^NAME=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d' ' -f1)
+        elif [[ -f /etc/redhat-release ]]; then
+            DISTRO="RedHat"
+        elif [[ -f /etc/debian_version ]]; then
+            DISTRO="Debian"
+        else
+            DISTRO="Linux"
+        fi
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         OS="macos"
         DISTRO="macOS"
@@ -43,8 +55,10 @@ check_os() {
         OS="windows"
         DISTRO="Windows"
     else
-        print_error "不支持的操作系统: $OSTYPE"
-        exit 1
+        # 如果无法检测，默认为Linux
+        print_warning "无法检测操作系统类型: $OSTYPE，假设为Linux"
+        OS="linux"
+        DISTRO="Linux"
     fi
     
     print_info "检测到操作系统: $DISTRO"
@@ -190,18 +204,10 @@ clone_repository() {
     REPO_URL="https://github.com/haohaoi34/jiankong.git"
     PROJECT_DIR="jiankong"
     
-    # 如果目录已存在，询问是否覆盖
+    # 如果目录已存在，直接覆盖（避免用户交互）
     if [[ -d "$PROJECT_DIR" ]]; then
-        read -p "目录 $PROJECT_DIR 已存在，是否删除并重新克隆？(y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$PROJECT_DIR"
-        else
-            print_info "使用现有目录"
-            cd "$PROJECT_DIR"
-            git pull origin main
-            return 0
-        fi
+        print_info "目录 $PROJECT_DIR 已存在，正在更新..."
+        rm -rf "$PROJECT_DIR"
     fi
     
     # 克隆仓库
@@ -210,7 +216,21 @@ clone_repository() {
         print_success "仓库克隆完成"
     else
         print_error "克隆仓库失败，请检查网络连接"
-        exit 1
+        # 如果克隆失败，尝试创建基本文件结构
+        print_info "尝试创建基本项目结构..."
+        mkdir -p "$PROJECT_DIR"
+        cd "$PROJECT_DIR"
+        
+        # 从当前脚本所在位置复制文件（如果可能）
+        if [[ -f "../main.py" ]]; then
+            cp ../main.py .
+            cp ../config.json .
+            cp ../requirements.txt .
+            print_success "使用本地文件创建项目"
+        else
+            print_error "无法获取项目文件，请检查网络连接或手动下载"
+            exit 1
+        fi
     fi
 }
 
@@ -292,6 +312,38 @@ EOF
     print_info "已使用内置API密钥: ${DEFAULT_ALCHEMY_API_KEY:0:8}..."
     print_info "已设置默认接收地址: $DEFAULT_RECIPIENT_ADDRESS"
     print_info "您可以稍后在程序中配置私钥"
+}
+
+# 创建基础项目文件（备用方案）
+create_project_files() {
+    print_info "创建项目文件..."
+    
+    # 如果main.py不存在，创建一个基础版本
+    if [[ ! -f "main.py" ]]; then
+        print_info "创建main.py文件..."
+        cat > main.py << 'MAIN_EOF'
+#!/usr/bin/env python3
+"""
+EVM多链自动监控转账工具 - 简化版本
+"""
+print("正在初始化EVM多链监控工具...")
+print("请手动从GitHub下载完整版本: https://github.com/haohaoi34/jiankong")
+print("此为备用版本，功能有限")
+MAIN_EOF
+        chmod +x main.py
+    fi
+    
+    # 创建requirements.txt
+    if [[ ! -f "requirements.txt" ]]; then
+        cat > requirements.txt << 'REQ_EOF'
+web3>=6.0.0
+prompt-toolkit>=3.0.0
+aiosqlite>=0.19.0
+requests>=2.28.0
+python-dotenv>=1.0.0
+eth-account>=0.8.0
+REQ_EOF
+    fi
 }
 
 # 创建默认配置
@@ -490,6 +542,7 @@ main() {
     check_pip
     check_git
     clone_repository
+    create_project_files  # 确保项目文件存在
     create_venv
     install_dependencies
     configure_env
