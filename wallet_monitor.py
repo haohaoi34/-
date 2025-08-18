@@ -112,9 +112,10 @@ def resolve_target_address() -> str:
         return env_addr.strip()
     
     # 2) 配置文件 config.json
-    if os.path.exists(CONFIG_FILE):
+    config_file = "config.json"
+    if os.path.exists(config_file):
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            with open(config_file, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
             cfg_addr = cfg.get('target_address')
             if cfg_addr and isinstance(cfg_addr, str) and cfg_addr.strip():
