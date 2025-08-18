@@ -544,7 +544,12 @@ start_program() {
     
     # 启动程序
     print_success "启动程序中..."
-    exec python main.py
+    # 当通过 curl|bash 运行时，stdin/out/err 可能不连接到 TTY，这里重定向到 /dev/tty 以进入交互菜单
+    if [[ -e /dev/tty ]]; then
+        exec python main.py < /dev/tty > /dev/tty 2>&1
+    else
+        exec python main.py
+    fi
 }
 
 # 主函数
