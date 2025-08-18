@@ -46,6 +46,28 @@ TELEGRAM_CHAT_ID = "5963704377"
 def print_success(msg): 
     print(f"{Fore.GREEN}✅ {msg}{Style.RESET_ALL}")
 
+def translate_error_message(error_msg: str) -> str:
+    """将常见的英文错误信息翻译为中文"""
+    translations = {
+        "insufficient funds": "余额不足",
+        "gas required exceeds allowance": "gas费用超出限制",
+        "transaction underpriced": "交易gas价格过低",
+        "nonce too low": "nonce值过低",
+        "nonce too high": "nonce值过高",
+        "intrinsic gas too low": "内在gas过低",
+        "exceeds block gas limit": "超出区块gas限制",
+        "replacement transaction underpriced": "替换交易gas价格过低",
+        "already known": "交易已知",
+        "could not replace transaction": "无法替换交易"
+    }
+    
+    error_lower = error_msg.lower()
+    for eng, chn in translations.items():
+        if eng in error_lower:
+            return f"{chn} ({error_msg})"
+    
+    return error_msg
+
 def print_error(msg): 
     print(f"{Fore.RED}❌ {msg}{Style.RESET_ALL}")
 
@@ -672,8 +694,8 @@ class AlchemyAPI:
         """获取RPC URL"""
         return chain_config.get('rpc_url', '').strip()
     
-    async def check_asset_transfers(self, address: str, chain_config: Dict) -> bool:
-        """检查地址是否有交易历史"""
+    async def check_asset_transfers(self, address: str, chain_config: Dict) -> Tuple[bool, int]:
+        """检查地址是否有交易历史，返回(是否有交易, 交易数量)"""
         await self._rate_limit()
         
         url = self._get_rpc_url(chain_config)
@@ -688,7 +710,7 @@ class AlchemyAPI:
                     "toBlock": "latest",
                     "fromAddress": address,
                     "category": ["external", "erc20", "erc721", "erc1155"],
-                    "maxCount": "0x1"
+                    "maxCount": "0xa"  # 获取最多10条记录来统计
                 }
             ]
         }
@@ -700,9 +722,10 @@ class AlchemyAPI:
             data = response.json()
             if 'result' in data:
                 transfers = data['result'].get('transfers', [])
-                return len(transfers) > 0
+                transfer_count = len(transfers)
+                return transfer_count > 0, transfer_count
             
-            return False
+            return False, 0
         except requests.exceptions.HTTPError as http_error:
             status_code = getattr(http_error.response, 'status_code', None)
             # 对于 400/403/404，视为该链在 Alchemy 上不受支持或密钥未开通，返回 False 以触发屏蔽
@@ -710,14 +733,14 @@ class AlchemyAPI:
                 logging.debug(
                     f"{chain_config['name']} 在 Alchemy 上不可用或未开通 (HTTP {status_code})，将屏蔽该链"
                 )
-                return False
+                return False, 0
             # 其它HTTP错误，保守处理为暂不屏蔽
             logging.debug(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
-            return True
+            return True, 0
         except Exception as e:
             # 网络超时等暂时性错误，不屏蔽
             logging.warning(f"检查交易历史失败 {chain_config['name']}: {e}")
-            return True  # 网络错误时假设有交易历史，避免误屏蔽
+            return True, 0  # 网络错误时假设有交易历史，避免误屏蔽
     
     async def get_balance(self, address: str, chain_config: Dict) -> float:
         """获取原生代币余额"""
@@ -1006,7 +1029,7 @@ class TransferManager:
                 # ERC-20代币使用全部余额
                 available_amount = balance_wei
             
-            print_gas(f"Gas估算 {chain_config['name']}: {base_gas_limit} gas * {gas_price/1e9:.2f} gwei = {total_gas_cost/1e18:.6f} ETH")
+            print_gas(f"⛽ Gas估算 {chain_config['name']}: {base_gas_limit} gas * {gas_price/1e9:.2f} gwei = {total_gas_cost/1e18:.6f} {chain_config['native_token']}")
             
             return base_gas_limit, gas_price, available_amount
             
@@ -1038,7 +1061,14 @@ class TransferManager:
                 
                 # 检查智能gas估算结果
                 if available_amount <= 0:
-                    raise ValueError("余额不足以支付gas费用")
+                    logging.warning(f"余额不足以支付gas费用 {chain_config['name']}: 余额 {balance_wei/1e18:.9f}, gas费用 {(gas_limit * gas_price)/1e18:.9f}")
+                    print_warning(f"取消重试 {chain_config['name']}: 余额不足以支付gas费用")
+                    return {
+                        "success": False,
+                        "error": f"余额不足以支付gas费用: 余额 {balance_wei} wei, 需要 {gas_limit * gas_price} wei",
+                        "type": "native",
+                        "skip_retry": True  # 标记跳过重试
+                    }
                 
                 # 使用智能计算的可用金额
                 amount_wei = available_amount
@@ -1083,6 +1113,21 @@ class TransferManager:
             except Exception as e:
                 error_msg = str(e)
                 logging.error(f"原生代币转账失败 (重试 {retry + 1}/{max_retries}) {chain_config['name']}: {error_msg}")
+                
+                # 检查是否是余额不足错误，如果是则直接跳出重试
+                if "insufficient funds" in error_msg.lower() or "余额不足" in error_msg:
+                    translated_error = translate_error_message(error_msg)
+                    print_error(f"❌ NATIVE转账失败: {translated_error}")
+                    print_warning(f"取消重试 {chain_config['name']}: 余额不足")
+                    await self.db_manager.log_transfer(
+                        from_address, chain_config['name'], chain_config['chain_id'],
+                        str(amount), to_address, status="failed", error_message=error_msg
+                    )
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "type": "native"
+                    }
                 
                 if retry == max_retries - 1:
                     # 记录失败的转账
@@ -1159,8 +1204,17 @@ class TransferManager:
                         'nonce': nonce,
                     })
                 
+                # 检查原生代币余额是否足够支付gas
+                native_balance = web3.eth.get_balance(from_address)
+                
                 # 获取gas价格
                 gas_data = await self.alchemy_api.get_gas_price(chain_config)
+                
+                # 计算gas费用
+                estimated_gas_cost = transaction_data['gas'] * gas_data['gas_price']
+                
+                if native_balance < estimated_gas_cost:
+                    raise ValueError(f"原生代币余额不足支付gas费用: 需要 {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
                 
                 # 根据链支持情况设置gas价格
                 if 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:
@@ -1202,6 +1256,23 @@ class TransferManager:
             except Exception as e:
                 error_msg = str(e)
                 logging.error(f"ERC-20转账失败 (重试 {retry + 1}/{max_retries}) {token_info['symbol']}: {error_msg}")
+                
+                # 检查是否是余额不足错误，如果是则直接跳出重试
+                if "insufficient funds" in error_msg.lower() or "余额不足" in error_msg:
+                    translated_error = translate_error_message(error_msg)
+                    print_error(f"❌ ERC20转账失败: {translated_error}")
+                    print_warning(f"取消重试: 原生代币余额不足支付gas费用")
+                    await self.db_manager.log_transfer(
+                        from_address, chain_config['name'], chain_config['chain_id'],
+                        f"{token_info['balance']} {token_info['symbol']}", to_address, 
+                        status="failed", error_message=error_msg
+                    )
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "type": "erc20",
+                        "symbol": token_info['symbol']
+                    }
                 
                 if retry == max_retries - 1:
                     # 记录失败的转账
@@ -1360,7 +1431,7 @@ class MonitoringApp:
             return False
         
         # 检查交易历史
-        has_history = await self.alchemy_api.check_asset_transfers(address, chain_config)
+        has_history, transfer_count = await self.alchemy_api.check_asset_transfers(address, chain_config)
         
         if not has_history:
             # 屏蔽无交易历史的链
@@ -1477,9 +1548,9 @@ class MonitoringApp:
         total_scanned = 0
         blocked_count = 0
         
-        for address_info in self.addresses:
+        for i, address_info in enumerate(self.addresses, 1):
             address = address_info['address']
-            print_info(f"扫描地址: {address}")
+            print_info(f"ℹ️  扫描地址 {i}/{len(self.addresses)}: {address}")
             
             for chain_setting in self.config['chains']:
                 chain_config = None
@@ -1492,7 +1563,7 @@ class MonitoringApp:
                     continue
                 
                 total_scanned += 1
-                print_progress(f"扫描 {chain_config['name']} 交易记录...")
+                # 静默扫描，不输出进度信息
                 
                 # 检查是否已被屏蔽
                 cache_key = f"{address}:{chain_config['chain_id']}"
@@ -1502,14 +1573,14 @@ class MonitoringApp:
                     continue
                 
                 # 检查交易历史
-                has_history = await self.alchemy_api.check_asset_transfers(address, chain_config)
+                has_history, transfer_count = await self.alchemy_api.check_asset_transfers(address, chain_config)
                 if not has_history:
                     await self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id'])
                     self.blocked_chains_cache.add(cache_key)
                     blocked_count += 1
                     print_warning(f"屏蔽链 {chain_config['name']}: 无交易记录")
                 else:
-                    print_success(f"有效链 {chain_config['name']}: 发现交易记录")
+                    print_success(f"✅ 有效链 {chain_config['name']}: 发现 {transfer_count}+ 条交易记录")
         
         print_info(f"交易扫描完成: 总扫描 {total_scanned}, 屏蔽 {blocked_count}")
     
@@ -1552,7 +1623,16 @@ class MonitoringApp:
                         if all_balances:
                             for token_key, token_info in all_balances.items():
                                 if token_info['balance'] > 0:
-                                    print_balance(f"发现余额: {token_info['balance']} {token_info['symbol']} ({chain_config['name']})")
+                                    # 智能格式化余额显示
+                                    balance = token_info['balance']
+                                    if balance >= 1:
+                                        balance_str = f"{balance:.6f}"
+                                    elif balance >= 0.000001:
+                                        balance_str = f"{balance:.8f}"
+                                    else:
+                                        balance_str = f"{balance:.12f}"
+                                    
+                                    print_balance(f"💰 发现余额: {balance_str} {token_info['symbol']} ({chain_config['name']})")
                                     
                                     # 执行转账
                                     result = await self.execute_transfer(address_info, chain_config, token_info)
