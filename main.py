@@ -678,17 +678,124 @@ class AlchemyAPI:
             'Content-Type': 'application/json',
         })
         
-        # API限频控制 - 优化到300-500 CU/s
+        # API限频控制 - 智能速率控制，目标450-500 CU/s
         self.last_request_time = 0
-        self.min_request_interval = 0.002  # 2ms间隔，目标400 CU/s
+        self.target_cu_per_second = 450  # 目标CU/s，安全留余量
+        self.max_cu_per_second = 500     # 最大不超过500 CU/s
+        self.cu_per_request = 1          # 每个请求消耗的CU数，动态调整
+        self.request_history = []        # 请求历史记录
+        self.current_cu_rate = 0         # 当前CU速率
+        
+        # 月度额度管理
+        self.monthly_cu_limit = 30_000_000  # 每月3000万CU
+        self.current_month_usage = 0        # 当月已使用CU
+        self.month_start_time = None        # 月初时间
+        self.daily_cu_budget = 0            # 每日CU预算
+        self.today_usage = 0                # 今日已使用CU
     
-    async def _rate_limit(self):
-        """API限频控制"""
+    async def _rate_limit(self, cu_cost: int = 1):
+        """智能API限频控制"""
         current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            await asyncio.sleep(self.min_request_interval - time_since_last)
-        self.last_request_time = time.time()
+        
+        # 清理1秒前的请求记录
+        self.request_history = [
+            (timestamp, cu) for timestamp, cu in self.request_history 
+            if current_time - timestamp <= 1.0
+        ]
+        
+        # 计算当前CU速率
+        current_cu_usage = sum(cu for _, cu in self.request_history)
+        
+        # 如果加上当前请求会超过目标速率，则等待
+        if current_cu_usage + cu_cost > self.target_cu_per_second:
+            # 计算需要等待的时间
+            oldest_timestamp = min(timestamp for timestamp, _ in self.request_history) if self.request_history else current_time
+            wait_time = 1.0 - (current_time - oldest_timestamp) + 0.01  # 额外等待10ms确保安全
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+                current_time = time.time()
+                # 重新清理请求记录
+                self.request_history = [
+                    (timestamp, cu) for timestamp, cu in self.request_history 
+                    if current_time - timestamp <= 1.0
+                ]
+        
+        # 记录当前请求
+        self.request_history.append((current_time, cu_cost))
+        self.last_request_time = current_time
+        
+        # 更新当前速率统计
+        self.current_cu_rate = sum(cu for _, cu in self.request_history)
+        
+        # 更新月度和日度使用统计
+        self._update_usage_stats(cu_cost)
+    
+    def _update_usage_stats(self, cu_cost: int):
+        """更新使用统计"""
+        from datetime import datetime, timezone
+        
+        now = datetime.now(timezone.utc)
+        
+        # 检查是否需要重置月度统计（每月1号）
+        if self.month_start_time is None or now.day == 1 and now.hour == 0:
+            if self.month_start_time is None or now.month != self.month_start_time.month:
+                self.month_start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                self.current_month_usage = 0
+                print_info(f"🔄 月度额度已重置: {self.monthly_cu_limit:,} CU")
+        
+        # 检查是否需要重置每日统计
+        if hasattr(self, 'last_reset_day'):
+            if now.day != self.last_reset_day:
+                self.today_usage = 0
+                self.last_reset_day = now.day
+                print_info(f"🌅 每日统计已重置")
+        else:
+            self.last_reset_day = now.day
+        
+        # 更新使用量
+        self.current_month_usage += cu_cost
+        self.today_usage += cu_cost
+        
+        # 计算剩余天数和每日预算
+        days_in_month = (now.replace(month=now.month+1 if now.month < 12 else 1, 
+                                   year=now.year if now.month < 12 else now.year+1, day=1) - 
+                        self.month_start_time).days
+        days_remaining = days_in_month - now.day + 1
+        
+        if days_remaining > 0:
+            remaining_cu = self.monthly_cu_limit - self.current_month_usage
+            self.daily_cu_budget = max(0, remaining_cu // days_remaining)
+            
+            # 额度预警
+            usage_percentage = (self.current_month_usage / self.monthly_cu_limit) * 100
+            if usage_percentage >= 90 and not hasattr(self, 'warned_90'):
+                print_warning(f"⚠️ 月度额度预警: 已使用 {usage_percentage:.1f}%")
+                self.warned_90 = True
+            elif usage_percentage >= 75 and not hasattr(self, 'warned_75'):
+                print_warning(f"⚠️ 月度额度提醒: 已使用 {usage_percentage:.1f}%")
+                self.warned_75 = True
+    
+    def get_usage_stats(self) -> Dict:
+        """获取使用统计信息"""
+        from datetime import datetime, timezone
+        
+        now = datetime.now(timezone.utc)
+        days_in_month = (now.replace(month=now.month+1 if now.month < 12 else 1, 
+                                   year=now.year if now.month < 12 else now.year+1, day=1) - 
+                        self.month_start_time).days if self.month_start_time else 30
+        days_remaining = days_in_month - now.day + 1
+        
+        return {
+            "current_cu_rate": self.current_cu_rate,
+            "monthly_usage": self.current_month_usage,
+            "monthly_limit": self.monthly_cu_limit,
+            "monthly_remaining": self.monthly_cu_limit - self.current_month_usage,
+            "usage_percentage": (self.current_month_usage / self.monthly_cu_limit) * 100,
+            "daily_budget": self.daily_cu_budget,
+            "today_usage": self.today_usage,
+            "days_remaining": days_remaining,
+            "days_in_month": days_in_month
+        }
     
     def _get_rpc_url(self, chain_config: Dict) -> str:
         """获取RPC URL"""
@@ -696,7 +803,7 @@ class AlchemyAPI:
     
     async def check_asset_transfers(self, address: str, chain_config: Dict) -> Tuple[bool, int]:
         """检查地址是否有交易历史，返回(是否有交易, 交易数量)"""
-        await self._rate_limit()
+        await self._rate_limit(15)  # alchemy_getAssetTransfers 消耗约15 CU
         
         url = self._get_rpc_url(chain_config)
         
@@ -744,7 +851,7 @@ class AlchemyAPI:
     
     async def get_balance(self, address: str, chain_config: Dict) -> float:
         """获取原生代币余额"""
-        await self._rate_limit()
+        await self._rate_limit(5)  # eth_getBalance 消耗约5 CU
         
         url = self._get_rpc_url(chain_config)
         
@@ -772,7 +879,7 @@ class AlchemyAPI:
     
     async def get_all_token_balances(self, address: str, chain_config: Dict) -> Dict[str, Dict]:
         """获取地址的所有代币余额（原生代币+ERC-20）"""
-        await self._rate_limit()
+        await self._rate_limit(25)  # alchemy_getTokenBalances 消耗约25 CU
         
         url = self._get_rpc_url(chain_config)
         
@@ -844,7 +951,7 @@ class AlchemyAPI:
     
     async def get_token_metadata(self, contract_address: str, chain_config: Dict) -> Dict:
         """获取ERC-20代币元数据"""
-        await self._rate_limit()
+        await self._rate_limit(10)  # alchemy_getTokenMetadata 消耗约10 CU
         
         url = self._get_rpc_url(chain_config)
         
@@ -872,7 +979,7 @@ class AlchemyAPI:
     
     async def get_gas_price(self, chain_config: Dict) -> Dict:
         """获取实时gas价格"""
-        await self._rate_limit()
+        await self._rate_limit(10)  # eth_feeHistory/eth_gasPrice 消耗约10 CU
         
         url = self._get_rpc_url(chain_config)
         
@@ -1309,6 +1416,12 @@ class MonitoringApp:
         self.monitoring_active = False
         self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
         self.db_semaphore = asyncio.Semaphore(5)  # 限制并发数据库操作
+        
+        # 轮次统计
+        self.round_start_time = None
+        self.round_cu_usage = 0
+        self.round_count = 0
+        
         self.setup_logging()
     
     def setup_logging(self):
@@ -1591,6 +1704,13 @@ class MonitoringApp:
         round_count = 0
         while self.monitoring_active:
             round_count += 1
+            self.round_count = round_count
+            
+            # 重置轮次统计
+            import time
+            self.round_start_time = time.time()
+            round_start_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
+            
             print_progress(f"第 {round_count} 轮监控开始")
             
             transfer_count = 0
@@ -1646,12 +1766,26 @@ class MonitoringApp:
                     # 每个链检查后短暂暂停
                     await asyncio.sleep(0.01)
             
+            # 计算本轮CU消耗
+            round_end_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
+            self.round_cu_usage = round_end_cu - round_start_cu
+            
             print_success(f"第 {round_count} 轮完成，执行 {transfer_count} 笔转账")
             
-            # 轮次间暂停
-            round_pause = self.config.get('settings', {}).get('round_pause', 5)
-            print_info(f"暂停 {round_pause} 秒...")
-            await asyncio.sleep(round_pause)
+            # 显示API使用统计
+            if self.alchemy_api:
+                usage_stats = self.alchemy_api.get_usage_stats()
+                print_info(f"📊 API使用统计:")
+                print_info(f"   当前速率: {usage_stats['current_cu_rate']} CU/s")
+                print_info(f"   本轮消耗: {self.round_cu_usage:,} CU")
+                print_info(f"   月度使用: {usage_stats['monthly_usage']:,} / {usage_stats['monthly_limit']:,} CU ({usage_stats['usage_percentage']:.1f}%)")
+                print_info(f"   每日预算: {usage_stats['daily_budget']:,} CU")
+                print_info(f"   剩余天数: {usage_stats['days_remaining']} 天")
+            
+            # 动态计算暂停时间
+            dynamic_pause = self.calculate_dynamic_pause()
+            print_info(f"⏱️ 智能暂停 {dynamic_pause} 秒...")
+            await asyncio.sleep(dynamic_pause)
     
     async def execute_transfer(self, address_info: Dict, chain_config: Dict, token_info: Dict) -> Dict:
         """执行转账操作"""
@@ -1717,6 +1851,14 @@ class MonitoringApp:
                 print(f"{Fore.GREEN}💎 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
                 print(f"{Fore.YELLOW}📊 已加载地址: {len(self.addresses)} 个{Style.RESET_ALL}")
                 print(f"{Fore.BLUE}🔗 支持链: {len(ChainConfig.SUPPORTED_CHAINS)} 条{Style.RESET_ALL}")
+                
+                # 显示API使用统计
+                if self.alchemy_api:
+                    usage_stats = self.alchemy_api.get_usage_stats()
+                    print(f"{Fore.MAGENTA}⚡ API速率: {usage_stats['current_cu_rate']}/450 CU/s{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}📈 月度额度: {usage_stats['monthly_usage']:,}/{usage_stats['monthly_limit']:,} CU ({usage_stats['usage_percentage']:.1f}%){Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}📅 剩余天数: {usage_stats['days_remaining']} 天 | 每日预算: {usage_stats['daily_budget']:,} CU{Style.RESET_ALL}")
+                
                 print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
                 print(f"{Fore.WHITE}1. 📥 导入私钥{Style.RESET_ALL}")
                 print(f"{Fore.WHITE}2. 🔍 开始监控{Style.RESET_ALL}")
@@ -1881,6 +2023,54 @@ class MonitoringApp:
                     print_success("私钥已保存到数据库")
         except Exception as e:
             print_warning(f"私钥数据库保存失败: {e}")
+    
+    def calculate_dynamic_pause(self) -> int:
+        """根据月度额度使用情况计算动态暂停时间"""
+        if not self.alchemy_api:
+            return 5  # 默认5秒
+            
+        usage_stats = self.alchemy_api.get_usage_stats()
+        
+        # 获取统计信息
+        monthly_usage = usage_stats["monthly_usage"]
+        monthly_remaining = usage_stats["monthly_remaining"]
+        days_remaining = usage_stats["days_remaining"]
+        daily_budget = usage_stats["daily_budget"]
+        
+        if days_remaining <= 0 or daily_budget <= 0:
+            return 300  # 如果额度用尽，暂停5分钟
+        
+        # 如果这一轮消耗了CU，计算建议的暂停时间
+        if self.round_cu_usage > 0 and self.round_start_time:
+            import time
+            round_duration = time.time() - self.round_start_time
+            
+            # 计算每秒CU消耗率
+            cu_per_second = self.round_cu_usage / max(round_duration, 1)
+            
+            # 计算每日CU分配下，剩余时间可以运行的秒数
+            if cu_per_second > 0:
+                daily_runtime_seconds = daily_budget / cu_per_second
+                
+                # 一天有86400秒，如果当前消耗速度下只能运行少于一天，需要暂停
+                seconds_in_day = 86400
+                if daily_runtime_seconds < seconds_in_day:
+                    # 计算需要暂停多久才能均匀分配到全天
+                    pause_seconds = seconds_in_day - daily_runtime_seconds
+                    
+                    # 限制暂停时间在合理范围内（5秒到30分钟）
+                    pause_seconds = max(5, min(1800, int(pause_seconds)))
+                    
+                    print_info(f"📊 动态暂停计算:")
+                    print_info(f"   本轮消耗: {self.round_cu_usage:,} CU ({round_duration:.1f}秒)")
+                    print_info(f"   每日预算: {daily_budget:,} CU")
+                    print_info(f"   剩余天数: {days_remaining} 天")
+                    print_info(f"   建议暂停: {pause_seconds} 秒")
+                    
+                    return pause_seconds
+        
+        # 默认暂停时间
+        return 5
     
     async def load_private_keys_from_db(self):
         """从数据库加载私钥"""
