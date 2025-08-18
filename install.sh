@@ -488,13 +488,13 @@ show_completion() {
     echo
     print_info "启动命令："
     if [[ "$OS" == "windows" ]]; then
-        echo "  venv\\Scripts\\activate && python main.py"
+        echo "  cd jiankong && venv\\Scripts\\activate && python main.py"
     else
-        echo "  source venv/bin/activate && python main.py"
+        echo "  cd jiankong && source venv/bin/activate && python main.py"
     fi
     echo
     print_info "或者直接运行："
-    echo "  python main.py"
+    echo "  cd jiankong && python main.py"
     echo
     print_info "内置配置："
     echo "  • API密钥: MYr2ZG1P7bxc4F1qVTLIj (已内置)"
@@ -518,14 +518,33 @@ show_completion() {
 # 启动程序
 start_program() {
     echo
-    read -p "是否立即启动程序？(y/n): " -n 1 -r
+    print_info "正在自动启动EVM多链监控工具..."
     echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_info "启动EVM多链监控工具..."
-        python main.py
-    else
-        print_info "您可以稍后运行 'python main.py' 启动程序"
+    
+    # 确保在正确的目录中
+    if [[ ! -f "main.py" ]]; then
+        print_error "找不到main.py文件，请检查安装"
+        print_info "当前目录: $(pwd)"
+        print_info "尝试进入jiankong目录..."
+        if [[ -d "jiankong" ]]; then
+            cd jiankong
+        else
+            print_error "找不到jiankong目录"
+            exit 1
+        fi
     fi
+    
+    # 激活虚拟环境（如果存在）
+    if [[ -f "venv/bin/activate" ]]; then
+        print_info "激活Python虚拟环境..."
+        source venv/bin/activate
+    elif [[ -f "venv/Scripts/activate" ]]; then
+        source venv/Scripts/activate
+    fi
+    
+    # 启动程序
+    print_success "启动程序中..."
+    exec python main.py
 }
 
 # 主函数
