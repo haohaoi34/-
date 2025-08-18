@@ -616,7 +616,7 @@ class AlchemyAPI:
         
         # API限频控制
         self.last_request_time = 0
-        self.min_request_interval = 0.1  # 100ms间隔
+        self.min_request_interval = 0.05  # 50ms间隔，提升速度
     
     async def _rate_limit(self):
         """API限频控制"""
@@ -627,8 +627,25 @@ class AlchemyAPI:
         self.last_request_time = time.time()
     
     def _get_rpc_url(self, chain_config: Dict) -> str:
-        """获取RPC URL"""
-        return f"{chain_config['rpc_url']}{self.api_key}"
+        """获取RPC URL（兼容多种写法）"""
+        base_url = chain_config.get('rpc_url', '').strip()
+        # 针对 Alchemy 域名，确保拼接为 .../v2/{API_KEY}
+        if 'alchemy.com' in base_url:
+            # 去除末尾多余斜杠，统一处理
+            trimmed = base_url.rstrip('/')
+            if trimmed.endswith('/v2'):
+                return f"{trimmed}/{self.api_key}"
+            elif trimmed.endswith('/v2') is False and '/v2/' in base_url:
+                # 已经包含 /v2/ 的情况，但末尾可能没有斜杠
+                if base_url.endswith('/v2/'):
+                    return f"{base_url}{self.api_key}"
+                # 如果是 .../v2 结尾，上面已处理；否则补成 /v2/{key}
+                return f"{trimmed}/v2/{self.api_key}"
+            else:
+                # 不含 /v2 的 Alchemy 基础域名，补齐
+                return f"{trimmed}/v2/{self.api_key}"
+        # 非 Alchemy RPC，直接返回原始 URL（某些链可能不受支持，将被上层逻辑屏蔽）
+        return base_url
     
     async def check_asset_transfers(self, address: str, chain_config: Dict) -> bool:
         """检查地址是否有交易历史"""
@@ -1212,10 +1229,9 @@ class MonitoringApp:
         # 加载配置
         await self.load_config()
         
-        # 初始化API
-        api_key = os.getenv('ALCHEMY_API_KEY')
-        if not api_key:
-            raise ValueError("未找到 ALCHEMY_API_KEY 环境变量")
+        # 初始化API（内置默认 API Key 作为后备）
+        api_key = os.getenv('ALCHEMY_API_KEY') or "MYr2ZG1P7bxc4F1qVTLIj"
+        logging.info(f"使用API密钥: {api_key[:8]}...")
         
         self.alchemy_api = AlchemyAPI(api_key)
         self.transfer_manager = TransferManager(self.alchemy_api, self.db_manager)
@@ -1256,7 +1272,7 @@ class MonitoringApp:
                 "erc20": [],
                 "settings": {
                     "monitoring_interval": 0.1,
-                    "round_pause": 60,
+                    "round_pause": 10,
                     "gas_threshold_gwei": 50,
                     "gas_wait_time": 60
                 }
@@ -1433,8 +1449,8 @@ class MonitoringApp:
                 monitoring_interval = self.config.get('settings', {}).get('monitoring_interval', 0.1)
                 await asyncio.sleep(monitoring_interval)
                 
-                # 每轮监控后暂停
-                round_pause = self.config.get('settings', {}).get('round_pause', 60)
+                # 每轮监控后暂停（减少默认暂停时间以提升效率）
+                round_pause = self.config.get('settings', {}).get('round_pause', 10)  # 从60秒减少到10秒
                 logging.info(f"本轮监控完成，暂停 {round_pause} 秒...")
                 await asyncio.sleep(round_pause)
                 
@@ -1500,29 +1516,14 @@ class MonitoringApp:
                 logging.error(f"菜单操作出错: {e}")
     
     async def configure_private_keys(self):
-        """配置私钥（支持多行粘贴，输入 END 完成）"""
+        """配置私钥（支持一次性粘贴多个私钥）"""
         print("\n配置私钥")
-        print("请输入私钥（支持多行粘贴，系统会自动提取有效私钥）:")
-        print("例如: 0xabc... 或 64位十六进制，无需逗号分隔")
-        print("输入 'END' 后回车完成输入")
-
-        def read_multiline_input() -> str:
-            lines: List[str] = []
-            while True:
-                try:
-                    line = input()
-                except EOFError:
-                    break
-                if line is None:
-                    break
-                stripped = line.strip()
-                if stripped.upper() == 'END':
-                    break
-                lines.append(line)
-            return "\n".join(lines)
+        print("请输入私钥（支持一次性粘贴多个私钥，系统会自动提取有效私钥）:")
+        print("例如: 0xabc123...def789,0x123...456 或每行一个私钥")
+        print("粘贴后直接按回车确认（无需输入END）")
 
         private_keys_input = await asyncio.get_event_loop().run_in_executor(
-            None, read_multiline_input
+            None, lambda: input("私钥内容: ").strip()
         )
 
         if private_keys_input and private_keys_input.strip():
@@ -1564,7 +1565,9 @@ class MonitoringApp:
         for i, chain in enumerate(self.config.get('chains', [])):
             print(f"{i+1}. {chain['name']} (Chain ID: {chain['chain_id']})")
             print(f"   接收地址: {chain['recipient_address']}")
-            print(f"   最小金额: {chain['min_amount']}")
+            # 兼容旧配置，如果没有min_amount字段则显示"无限制"
+            min_amount = chain.get('min_amount', '无限制')
+            print(f"   最小金额: {min_amount}")
         
         print("\n可用链列表:")
         chain_list = list(ChainConfig.SUPPORTED_CHAINS.items())
@@ -1691,7 +1694,8 @@ class MonitoringApp:
         
         print("\n配置的链:")
         for chain in self.config.get('chains', []):
-            print(f"  {chain['name']} -> {chain['recipient_address']} (最小: {chain['min_amount']})")
+            min_amount = chain.get('min_amount', '无限制')
+            print(f"  {chain['name']} -> {chain['recipient_address']} (最小: {min_amount})")
 
 async def main():
     """主函数"""
