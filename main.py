@@ -661,7 +661,19 @@ class AlchemyAPI:
                 return len(transfers) > 0
             
             return False
+        except requests.exceptions.HTTPError as http_error:
+            status_code = getattr(http_error.response, 'status_code', None)
+            # 对于 400/403/404，视为该链在 Alchemy 上不受支持或密钥未开通，返回 False 以触发屏蔽
+            if status_code in (400, 403, 404):
+                logging.warning(
+                    f"{chain_config['name']} 在 Alchemy 上不可用或未开通 (HTTP {status_code})，将屏蔽该链"
+                )
+                return False
+            # 其它HTTP错误，保守处理为暂不屏蔽
+            logging.warning(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
+            return True
         except Exception as e:
+            # 网络超时等暂时性错误，不屏蔽
             logging.warning(f"检查交易历史失败 {chain_config['name']}: {e}")
             return True  # 网络错误时假设有交易历史，避免误屏蔽
     
@@ -1280,8 +1292,10 @@ class MonitoringApp:
         private_key = address_info['private_key']
         
         try:
-            # 检查链是否被屏蔽
+            # 检查链是否被屏蔽或不受支持
             if not await self.check_chain_history(address, chain_config):
+                # 立即屏蔽以避免重复请求
+                await self.db_manager.block_chain(address, chain_config['name'], chain_config['chain_id'])
                 return
             
             # 获取所有代币余额（原生代币+ERC-20）
