@@ -126,6 +126,50 @@ check_python() {
     print_success "Python安装完成"
 }
 
+# 检查和安装编译工具
+check_build_tools() {
+    print_info "检查编译工具..."
+    
+    # 根据用户权限选择安装方式
+    if [[ $EUID -eq 0 ]]; then
+        SUDO_CMD=""
+    else
+        SUDO_CMD="sudo"
+    fi
+    
+    if [[ "$OS" == "linux" ]]; then
+        # 检查gcc是否存在
+        if ! command -v gcc &> /dev/null; then
+            print_info "安装编译工具（用于编译Python包）..."
+            
+            if command -v apt-get &> /dev/null; then
+                $SUDO_CMD apt-get update -qq
+                $SUDO_CMD apt-get install -y build-essential python3-dev
+            elif command -v yum &> /dev/null; then
+                $SUDO_CMD yum groupinstall -y "Development Tools"
+                $SUDO_CMD yum install -y python3-devel
+            elif command -v dnf &> /dev/null; then
+                $SUDO_CMD dnf groupinstall -y "Development Tools"
+                $SUDO_CMD dnf install -y python3-devel
+            elif command -v apk &> /dev/null; then
+                $SUDO_CMD apk add build-base python3-dev
+            else
+                print_warning "无法自动安装编译工具，可能需要手动安装"
+            fi
+            print_success "编译工具安装完成"
+        else
+            print_success "编译工具已安装"
+        fi
+    elif [[ "$OS" == "macos" ]]; then
+        # macOS通常有Xcode命令行工具
+        if ! command -v gcc &> /dev/null && ! command -v clang &> /dev/null; then
+            print_warning "请安装Xcode命令行工具: xcode-select --install"
+        else
+            print_success "编译工具已安装"
+        fi
+    fi
+}
+
 # 检查pip
 check_pip() {
     print_info "检查pip..."
@@ -307,22 +351,52 @@ EOF
         for package in "${missing_packages[@]}"; do
             print_info "正在安装 $package..."
             
+            # 尝试安装包
+            install_success=false
+            
             if [[ "$package" == "web3" ]]; then
-                python -m pip install "web3>=6.0.0,<7.0.0"
+                if python -m pip install "web3>=6.0.0,<7.0.0"; then
+                    install_success=true
+                fi
             elif [[ "$package" == "aiosqlite" ]]; then
-                python -m pip install "aiosqlite>=0.19.0"
+                if python -m pip install "aiosqlite>=0.19.0"; then
+                    install_success=true
+                fi
             elif [[ "$package" == "requests" ]]; then
-                python -m pip install "requests>=2.28.0"
+                if python -m pip install "requests>=2.28.0"; then
+                    install_success=true
+                fi
             elif [[ "$package" == "python-dotenv" ]]; then
-                python -m pip install "python-dotenv>=1.0.0"
+                if python -m pip install "python-dotenv>=1.0.0"; then
+                    install_success=true
+                fi
             elif [[ "$package" == "eth-account" ]]; then
-                python -m pip install "eth-account>=0.8.0"
+                # eth-account可能需要编译，先尝试预编译版本
+                if python -m pip install "eth-account>=0.8.0" --prefer-binary; then
+                    install_success=true
+                elif python -m pip install "eth-account>=0.8.0" --no-cache-dir; then
+                    install_success=true
+                fi
             elif [[ "$package" == "colorama" ]]; then
-                python -m pip install "colorama>=0.4.6"
+                if python -m pip install "colorama>=0.4.6"; then
+                    install_success=true
+                fi
             fi
             
-            if [ $? -ne 0 ]; then
-                print_error "$package 安装失败"
+            # 如果安装失败，尝试备用方案
+            if [ "$install_success" = false ]; then
+                print_warning "$package 安装失败，尝试备用方案..."
+                
+                # 尝试使用--no-deps和--force-reinstall
+                if python -m pip install "$package" --no-deps --force-reinstall --prefer-binary; then
+                    install_success=true
+                    print_success "$package 使用备用方案安装成功"
+                fi
+            fi
+            
+            if [ "$install_success" = false ]; then
+                print_error "$package 安装失败，请检查编译环境"
+                print_info "可能需要手动安装编译工具：sudo apt-get install build-essential python3-dev"
                 exit 1
             else
                 print_success "$package 安装成功"
@@ -683,6 +757,7 @@ main() {
     # 执行安装步骤
     check_os
     check_python
+    check_build_tools  # 在pip之前检查编译工具
     check_pip
     check_git
     clone_repository
