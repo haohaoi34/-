@@ -469,7 +469,7 @@ class ChainConfig:
             "explorer": "https://sepolia.basescan.org"
         },
         "TEA_SEPOLIA": {
-            "chain_id": 1337,
+            "chain_id": 10218,
             "name": "Tea Sepolia",
             "rpc_url": "https://tea-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
             "native_token": "TEA",
@@ -1347,20 +1347,33 @@ class AlchemyAPI:
             data = response.json()
             if 'result' in data:
                 gas_price = int(data['result'], 16)
-                return {
-                    "gas_price": gas_price,
-                    "max_fee": gas_price,
-                    "base_fee": gas_price,
-                    "priority_fee": 0
-                }
+                # 确保gas价格不为零
+                if gas_price > 0:
+                    return {
+                        "gas_price": gas_price,
+                        "max_fee": gas_price,
+                        "base_fee": gas_price,
+                        "priority_fee": 0
+                    }
+                else:
+                    print_warning(f"Gas价格为0，使用最小值 {chain_config['name']}")
+                    gas_price = 1000000000  # 1 gwei minimum
+                    return {
+                        "gas_price": gas_price,
+                        "max_fee": gas_price,
+                        "base_fee": gas_price,
+                        "priority_fee": 0
+                    }
         except Exception as e:
             logging.error(f"获取gas价格失败 {chain_config['name']}: {e}")
             
-        # 默认gas价格
+        # 默认gas价格 - 确保不为零
+        default_gas = 20000000000  # 20 gwei
+        print_warning(f"使用默认gas价格 {chain_config['name']}: {default_gas/1e9:.2f} gwei")
         return {
-            "gas_price": 20000000000,  # 20 gwei
-            "max_fee": 20000000000,
-            "base_fee": 20000000000,
+            "gas_price": default_gas,
+            "max_fee": default_gas,
+            "base_fee": default_gas,
             "priority_fee": 0
         }
 
@@ -1428,22 +1441,38 @@ class TransferManager:
             # 获取gas价格
             gas_data = await self.alchemy_api.get_gas_price(chain_config)
             
-            # 根据代币类型设置gas limit
+            # 根据代币类型和链设置gas limit
             if is_erc20:
-                base_gas_limit = 65000  # ERC-20转账基础gas
+                if chain_config['chain_id'] == 324:  # ZKsync Era
+                    base_gas_limit = 200000  # ZKsync ERC-20需要更多gas
+                else:
+                    base_gas_limit = 65000  # ERC-20转账基础gas
             else:
-                base_gas_limit = 21000  # 原生代币转账基础gas
+                if chain_config['chain_id'] in [421614, 42161]:  # Arbitrum Sepolia/One
+                    base_gas_limit = 50000  # Arbitrum需要更多gas
+                elif chain_config['chain_id'] == 324:  # ZKsync Era
+                    base_gas_limit = 150000  # ZKsync原生转账需要更多gas
+                else:
+                    base_gas_limit = 21000  # 原生代币转账基础gas
             
-            # 智能gas价格调整
+            # 智能gas价格调整 - 确保不为零
+            base_gas_price = max(gas_data['gas_price'], 1000000000)  # 至少1 gwei
+            
             if chain_config['chain_id'] in [1, 42161, 10]:  # 主网、Arbitrum、Optimism
                 # 高价值链，使用较低gas价格
-                gas_price = int(gas_data['gas_price'] * 0.8)
+                gas_price = max(int(base_gas_price * 0.8), 1000000000)
             elif chain_config['chain_id'] in [137, 56, 43114]:  # Polygon、BSC、Avalanche
                 # 中等价值链，使用标准gas价格
-                gas_price = gas_data['gas_price']
+                gas_price = max(base_gas_price, 1000000000)
+            elif chain_config['chain_id'] == 534352:  # Scroll
+                # Scroll需要考虑L1 fee，使用更高的gas价格
+                gas_price = max(int(base_gas_price * 3.0), 5000000000)  # 至少5 gwei
+            elif chain_config['chain_id'] == 324:  # ZKsync Era
+                # ZKsync Era特殊处理
+                gas_price = max(int(base_gas_price * 2.0), 50000000)  # 至少0.05 gwei
             else:
                 # 其他链，使用较高gas价格确保成功
-                gas_price = int(gas_data['gas_price'] * 1.2)
+                gas_price = max(int(base_gas_price * 1.2), 2000000000)  # 至少2 gwei
             
             # 计算gas成本
             total_gas_cost = base_gas_limit * gas_price
@@ -1490,12 +1519,13 @@ class TransferManager:
                 )
                 
                 # 检查智能gas估算结果
-                if available_amount <= 0:
-                    logging.warning(f"余额不足以支付gas费用 {chain_config['name']}: 余额 {balance_wei/1e18:.9f}, gas费用 {(gas_limit * gas_price)/1e18:.9f}")
+                total_needed = gas_limit * gas_price
+                if available_amount <= 0 or balance_wei < total_needed:
+                    logging.warning(f"余额不足以支付gas费用 {chain_config['name']}: 余额 {balance_wei/1e18:.9f}, gas费用 {total_needed/1e18:.9f}")
                     print_warning(f"取消重试 {chain_config['name']}: 余额不足以支付gas费用")
                     return {
                         "success": False,
-                        "error": f"余额不足以支付gas费用: 余额 {balance_wei} wei, 需要 {gas_limit * gas_price} wei",
+                        "error": f"余额不足以支付gas费用: 余额 {balance_wei} wei, 需要 {total_needed} wei",
                         "type": "native",
                         "skip_retry": True  # 标记跳过重试
                     }
@@ -1613,26 +1643,32 @@ class TransferManager:
                 # 计算转账金额（转出所有余额）
                 amount_raw = int(token_info['balance'] * (10 ** token_info['decimals']))
                 
-                # 构建交易数据
+                # 根据链设置适当的gas limit
+                if chain_config['chain_id'] == 324:  # ZKsync Era
+                    gas_limit = 200000
+                elif chain_config['chain_id'] in [421614, 42161]:  # Arbitrum
+                    gas_limit = 150000
+                else:
+                    gas_limit = 100000
+                
+                # 构建交易数据 - 不包含gas价格
+                base_transaction = {
+                    'chainId': chain_config['chain_id'],
+                    'gas': gas_limit,
+                    'nonce': nonce,
+                }
+                
                 try:
                     transaction_data = contract.functions.transfer(
                         Web3.to_checksum_address(to_address),
                         amount_raw
-                    ).build_transaction({
-                        'chainId': chain_config['chain_id'],
-                        'gas': 100000,  # ERC-20转账的gas limit
-                        'nonce': nonce,
-                    })
+                    ).build_transaction(base_transaction)
                 except AttributeError:
                     # 兼容不同版本的Web3
                     transaction_data = contract.functions.transfer(
                         Web3.to_checksum_address(to_address),
                         amount_raw
-                    ).buildTransaction({
-                        'chainId': chain_config['chain_id'],
-                        'gas': 100000,
-                        'nonce': nonce,
-                    })
+                    ).buildTransaction(base_transaction)
                 
                 # 检查原生代币余额是否足够支付gas
                 native_balance = web3.eth.get_balance(from_address)
@@ -1662,13 +1698,30 @@ class TransferManager:
                     
                     raise ValueError(f"原生代币余额不足支付gas费用: 需要 {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
                 
-                # 根据链支持情况设置gas价格
-                if 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:
-                    transaction_data.update({
-                        'maxFeePerGas': gas_data['max_fee'],
-                        'maxPriorityFeePerGas': gas_data['priority_fee']
-                    })
-                else:
+                # 安全设置gas价格 - 避免参数冲突
+                try:
+                    # 移除可能冲突的gas价格字段
+                    if 'gasPrice' in transaction_data:
+                        del transaction_data['gasPrice']
+                    if 'maxFeePerGas' in transaction_data:
+                        del transaction_data['maxFeePerGas']
+                    if 'maxPriorityFeePerGas' in transaction_data:
+                        del transaction_data['maxPriorityFeePerGas']
+                    
+                    # 特殊链处理
+                    if chain_config['chain_id'] == 324:  # ZKsync Era
+                        # ZKsync Era使用传统gas价格，但需要特殊的gas估算
+                        transaction_data['gasPrice'] = max(gas_data['gas_price'], 25000000)  # 最少0.025 gwei
+                        transaction_data['gas'] = 200000  # ZKsync需要更多gas
+                    elif 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:
+                        # EIP-1559支持的链
+                        transaction_data['maxFeePerGas'] = gas_data['max_fee']
+                        transaction_data['maxPriorityFeePerGas'] = gas_data['priority_fee']
+                    else:
+                        # 传统gas价格
+                        transaction_data['gasPrice'] = gas_data['gas_price']
+                except Exception as e:
+                    print_warning(f"设置gas价格出错，使用传统方式: {e}")
                     transaction_data['gasPrice'] = gas_data['gas_price']
                 
                 # 签名交易
