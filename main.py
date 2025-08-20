@@ -2222,7 +2222,7 @@ class MonitoringApp:
                         "name": "ETH_MAINNET",
                         "chain_id": 1,
                         "recipient_address": "0x0000000000000000000000000000000000000000",
-                        "min_amount": "0.01"
+                        "min_amount": "0"
                     }
                 ],
                 "erc20": [],
@@ -2533,9 +2533,14 @@ class MonitoringApp:
             
             print_progress(f"第 {round_count} 轮监控开始")
             
-            tasks = []
-            operation_count = 0
-            for address_info in self.addresses:
+            # 为每个地址单独处理，提供更清晰的显示
+            total_transfers_this_round = 0
+            for addr_index, address_info in enumerate(self.addresses, 1):
+                address = address_info['address']
+                print(f"\n{Fore.CYAN}📍 地址 {addr_index}/{len(self.addresses)}: {address[:8]}...{address[-6:]}{Style.RESET_ALL}")
+                
+                # 处理该地址的所有链
+                address_transfers = 0
                 for chain_setting in self.config['chains']:
                     # 通过chain_id查找配置，更可靠
                     chain_config = None
@@ -2545,11 +2550,18 @@ class MonitoringApp:
                             break
                     
                     if chain_config:
-                        tasks.append(self.check_and_transfer_with_progress(address_info, chain_config, operation_count, total_operations))
-                        operation_count += 1
-
-            results = await asyncio.gather(*tasks)
-            transfer_count = sum(1 for r in results if r)
+                        result = await self.check_and_transfer(address_info, chain_config)
+                        if result:
+                            address_transfers += 1
+                            total_transfers_this_round += 1
+                
+                # 显示该地址的结果
+                if address_transfers > 0:
+                    print(f"{Fore.GREEN}✅ 地址 {addr_index}: {address_transfers} 笔转账{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}⭕ 地址 {addr_index}: 无转账{Style.RESET_ALL}")
+            
+            transfer_count = total_transfers_this_round
 
             # 计算本轮CU消耗
             if isinstance(self.alchemy_api, AlchemyAPILoadBalancer):
@@ -2596,25 +2608,24 @@ class MonitoringApp:
     async def check_and_transfer(self, address_info: Dict, chain_config: Dict) -> bool:
         """检查单个地址和链的余额并执行转账"""
         address = address_info['address']
+        chain_name = chain_config['name']
         
         try:
             all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
+            
+            # 检查是否有余额
+            has_balance = False
+            total_tokens = 0
+            
             if all_balances:
                 for token_key, token_info in all_balances.items():
+                    total_tokens += 1
                     if token_info['balance'] > 0:
-                        # 原生代币按链级最小阈值过滤
-                        if token_info.get('type') == 'native':
-                            try:
-                                min_amount_str = next((c.get('min_amount') for c in self.config.get('chains', []) if c.get('chain_id') == chain_config.get('chain_id')), '0')
-                                min_amount = float(min_amount_str) if min_amount_str is not None else 0.0
-                            except Exception:
-                                min_amount = 0.0
-                            if token_info['balance'] < min_amount:
-                                print_info(f"原生代币余额低于最小阈值 {min_amount}，已跳过 ({chain_config['name']})")
-                                continue
+                        has_balance = True
+                        # 取消最小额度阈值限制，任何大于0的余额都进行转账
                         balance = token_info['balance']
                         balance_str = f"{balance:.6f}" if balance >= 1 else f"{balance:.12f}"
-                        print_balance(f"💰 发现余额: {balance_str} {token_info['symbol']} ({chain_config['name']})")
+                        print(f"{Fore.RED}🔴 发现余额: {balance_str} {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
                         
                         result = await self.execute_transfer(address_info, chain_config, token_info)
                         if result and result.get('success'):
@@ -2631,10 +2642,17 @@ class MonitoringApp:
                             
                             self.add_transfer_stats(transfer_value_usd)
                             print_transfer(f"转账成功: {result.get('amount', 0)} {token_info['symbol']} (${transfer_value_usd:.2f})")
-                            return True
+            
+            # 显示链状态
+            if not has_balance:
+                print(f"{Fore.BLACK}⚫ 无余额: {chain_name}{Style.RESET_ALL}")
+            
+            return has_balance
+            
         except Exception as e:
-            print_error(f"监控异常 {chain_config['name']}: {e}")
-        return False
+            # 对于API错误，也显示为无余额状态
+            print(f"{Fore.BLACK}⚫ 无余额: {chain_name} (API错误){Style.RESET_ALL}")
+            return False
     
     async def execute_transfer(self, address_info: Dict, chain_config: Dict, token_info: Dict) -> Dict:
         """执行转账操作"""
@@ -2809,7 +2827,7 @@ class MonitoringApp:
                                 "name": chain_name,
                                 "chain_id": chain_info['chain_id'],
                                 "recipient_address": TARGET_ADDRESS,
-                                "min_amount": "0.001"
+                                "min_amount": "0"
                             })
 
                     self.config = {
