@@ -678,8 +678,7 @@ class PriceChecker:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'x-cg-pro-api-key': COINGECKO_API_KEY  # 添加API密钥
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
         # 长期缓存设置 - 分层缓存策略
@@ -898,8 +897,8 @@ class PriceChecker:
         try:
             self._record_api_call()  # 记录API调用
             
-            # 使用Pro API URL
-            url = f"https://pro-api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd"
+            # 使用免费公共API URL
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd"
             
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
@@ -922,8 +921,8 @@ class PriceChecker:
         try:
             self._record_api_call()  # 记录API调用
             
-            # 使用Pro API URL，尝试以太坊主网
-            url = f"https://pro-api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses={contract_address}&vs_currencies=usd"
+            # 使用免费公共API URL，尝试以太坊主网
+            url = f"https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses={contract_address}&vs_currencies=usd"
             
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
@@ -950,7 +949,7 @@ class PriceChecker:
                 return None
             self._record_api_call()  # 记录API调用
             
-            url = f"https://pro-api.coingecko.com/api/v3/search?query={urllib.parse.quote(symbol)}"
+            url = f"https://api.coingecko.com/api/v3/search?query={urllib.parse.quote(symbol)}"
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
@@ -1309,11 +1308,9 @@ class AlchemyAPI:
         except requests.exceptions.HTTPError as http_error:
             self.record_failure()  # 记录失败
             status_code = getattr(http_error.response, 'status_code', None)
-            # 对于 400/403/404，视为该链在 Alchemy 上不受支持或密钥未开通，返回 False 以触发屏蔽
-            if status_code in (400, 403, 404):
-                logging.debug(
-                    f"{chain_config['name']} 在 Alchemy 上不可用或未开通 (HTTP {status_code})，将屏蔽该链"
-                )
+            # 对于 400/403/404/429，视为该链在 Alchemy 上不受支持或密钥未开通
+            if status_code in (400, 403, 404, 429):
+                print_warning(f"🚫 {chain_config['name']} 在Alchemy上不可用 (HTTP {status_code})，已跳过")
                 return False, 0
             # 其它HTTP错误，保守处理为暂不屏蔽
             logging.debug(f"检查交易历史失败 {chain_config['name']} (HTTP {status_code}): {http_error}")
@@ -1349,6 +1346,14 @@ class AlchemyAPI:
                 return float(balance_eth)
             
             self.record_success()  # 记录成功
+            return 0.0
+        except requests.exceptions.HTTPError as http_error:
+            self.record_failure()  # 记录失败
+            status_code = getattr(http_error.response, 'status_code', None)
+            if status_code in (400, 403, 404, 429):
+                # 不支持的链，静默跳过，避免重复错误日志
+                return 0.0
+            logging.error(f"获取余额失败 {chain_config['name']}: {http_error}")
             return 0.0
         except Exception as e:
             self.record_failure()  # 记录失败
@@ -1412,6 +1417,14 @@ class AlchemyAPI:
             self.record_success()  # 记录成功
             return all_balances
             
+        except requests.exceptions.HTTPError as http_error:
+            self.record_failure()  # 记录失败
+            status_code = getattr(http_error.response, 'status_code', None)
+            if status_code in (400, 403, 404, 429):
+                # 不支持的链，静默跳过
+                return {}
+            logging.error(f"获取全代币余额失败 {chain_config['name']}: {http_error}")
+            return {}
         except Exception as e:
             self.record_failure()  # 记录失败
             logging.error(f"获取全代币余额失败 {chain_config['name']}: {e}")
@@ -2775,28 +2788,17 @@ class MonitoringApp:
                         except Exception as e:
                             logging.error(f"处理私钥失败: {e}")
 
-                    # 创建配置 - 包含所有Alchemy支持的链条（主网+测试网）
+                    # 创建配置 - 只包含Alchemy稳定支持的主要链
                     working_chains = [
-                        # 主要主网
+                        # 主要主网 - Alchemy稳定支持
                         "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
                         "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
                         "ZKSYNC_ERA", "POLYGON_ZKEVM", "AVALANCHE_C", "BSC_MAINNET", 
-                        "FANTOM_OPERA", "BLAST", "LINEA", "MANTLE", "GNOSIS", 
-                        "CELO", "SCROLL", 
+                        "BLAST", "LINEA", "SCROLL", "ZORA",
                         
-                        # 新兴主网
-                        "WORLD_CHAIN", "SHAPE", "BERACHAIN", "UNICHAIN", "ZORA", 
-                        "ASTAR", "ZETACHAIN", "RONIN", "SETTLUS", "ROOTSTOCK", 
-                        "STORY", "HUMANITY", "HYPERLIQUID", "GALACTICA", "LENS", 
-                        "FRAX", "INK", "BOTANIX", "BOBA", "SUPERSEED", "FLOW_EVM", 
-                        "DEGEN", "APECHAIN", "ANIME", "METIS", "SONIC", "SEI", 
-                        "OPBNB", "ABSTRACT", "SONEIUM", "LUMIA_PRISM",
-                        
-                        # 测试网
+                        # 测试网 - 稳定支持
                         "ETH_SEPOLIA", "POLYGON_AMOY", "ARBITRUM_SEPOLIA", 
-                        "OPTIMISM_SEPOLIA", "BASE_SEPOLIA", "TEA_SEPOLIA",
-                        "GENSYN_TESTNET", "RISE_TESTNET", "MONAD_TESTNET", 
-                        "XMTP_SEPOLIA", "CROSSFI_TESTNET"
+                        "OPTIMISM_SEPOLIA", "BASE_SEPOLIA"
                     ]
                     
                     chains_config = []
