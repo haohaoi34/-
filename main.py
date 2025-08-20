@@ -2287,16 +2287,9 @@ class MonitoringApp:
         self.stats_display_active = True  # 启用统计显示
         
         try:
-            # 第一步：初始化RPC连接并屏蔽无效链
-            print_progress("第一步：初始化RPC连接并屏蔽无效链")
-            await self.initialize_rpc_connections()
-            
-            # 第二步：扫描交易记录并屏蔽无交易记录的链
-            print_progress("第二步：扫描链上交易记录")
-            await self.scan_transaction_history()
-            
-            # 第三步：开始监控循环
-            print_progress("第三步：开始余额监控和转账")
+            # 直接开始监控循环 - 跳过所有预检查
+            print_progress("🚀 快速启动模式：直接开始余额监控和转账")
+            print_info("⚡ 跳过RPC连接测试和交易记录扫描，立即开始余额查询")
             await self.monitoring_loop()
                 
         except KeyboardInterrupt:
@@ -2590,10 +2583,7 @@ class MonitoringApp:
     async def check_and_transfer(self, address_info: Dict, chain_config: Dict) -> bool:
         """检查单个地址和链的余额并执行转账"""
         address = address_info['address']
-        cache_key = f"{address}:{chain_config['chain_id']}"
-        if cache_key in self.blocked_chains_cache:
-            return False
-
+        
         try:
             all_balances = await self.alchemy_api.get_all_token_balances(address, chain_config)
             if all_balances:
