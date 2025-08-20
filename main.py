@@ -414,7 +414,7 @@ class ChainConfig:
         "OPBNB": {
             "chain_id": 204,
             "name": "opBNB",
-            "rpc_url": "https://opbnb-mainnet.g.alchemy.com/v2/PLACEHOLDER_API_KEY",
+            "rpc_url": "https://opbnb-mainnet-rpc.bnbchain.org",
             "native_token": "BNB",
             "explorer": "https://opbnbscan.com"
         },
