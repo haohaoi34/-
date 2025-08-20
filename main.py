@@ -1663,51 +1663,57 @@ class TransferManager:
             if base_gas_price <= 0:
                 base_gas_price = 20000000000  # 如果价格为零，使用20 gwei
             
-            # 🎯 粉尘金额特殊处理：使用最低gas价格和最小gas limit
+            # 🎯 粉尘金额特殊处理：使用合理的低gas价格
             dust_threshold = Web3.to_wei(0.001, 'ether')  # 0.001 ETH以下视为粉尘
             
             if not is_erc20 and balance_wei <= dust_threshold:
-                print_info(f"💨 检测到粉尘金额，启用超低gas模式")
+                print_info(f"💨 检测到粉尘金额，启用智能低gas模式")
                 
-                # 使用网络最低gas价格（不加倍数）
-                min_gas_price = max(base_gas_price // 10, 1000000000)  # 最低1 gwei
+                # 获取当前网络的基础费用，确保我们的gas价格不会太低
+                try:
+                    latest_block = web3.eth.get_block('latest')
+                    base_fee = getattr(latest_block, 'baseFeePerGas', None)
+                    if base_fee:
+                        # 使用基础费用的1.1倍作为最低价格，确保交易能被接受
+                        min_gas_price = max(int(base_fee * 1.1), base_gas_price // 5)
+                        print_info(f"📊 网络基础费用: {base_fee/1e9:.3f} gwei，调整为: {min_gas_price/1e9:.3f} gwei")
+                    else:
+                        # 如果没有基础费用信息，使用保守的低价格
+                        min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
+                except Exception as e:
+                    print_warning(f"无法获取基础费用: {e}")
+                    min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
                 
                 # 使用最小gas limit
-                if chain_config['chain_id'] in [421614, 42161]:  # Arbitrum
-                    min_gas_limit = 21000  # Arbitrum最小
-                else:
-                    min_gas_limit = 21000  # 标准最小
+                min_gas_limit = 21000  # 标准最小
                 
-                # 计算最小gas成本
+                # 计算gas成本
                 min_gas_cost = min_gas_limit * min_gas_price
                 
                 # 检查是否还有足够余额
                 if balance_wei > min_gas_cost:
                     available_amount = balance_wei - min_gas_cost
-                    print_success(f"💎 粉尘优化: {min_gas_limit} gas * {min_gas_price/1e9:.3f} gwei = {min_gas_cost/1e18:.9f} ETH")
+                    print_success(f"💎 智能低gas: {min_gas_limit} gas * {min_gas_price/1e9:.3f} gwei = {min_gas_cost/1e18:.9f} ETH")
                     return min_gas_limit, min_gas_price, available_amount
                 else:
-                    # 如果连最低gas都付不起，尝试极端模式
-                    ultra_low_gas_price = 1000000000  # 1 gwei 绝对最低
-                    ultra_low_gas_cost = min_gas_limit * ultra_low_gas_price
-                    
-                    if balance_wei > ultra_low_gas_cost:
-                        available_amount = balance_wei - ultra_low_gas_cost
-                        print_warning(f"⚡ 极限模式: {min_gas_limit} gas * {ultra_low_gas_price/1e9:.1f} gwei = {ultra_low_gas_cost/1e18:.9f} ETH")
-                        return min_gas_limit, ultra_low_gas_price, available_amount
-                    else:
-                        # 🔥 终极粉尘模式：尝试使用绝对最低参数
-                        if balance_wei > 21000:  # 至少要能支付基础gas
-                            ultra_minimal_gas_price = 1  # 0.000000001 gwei (理论最低)
-                            ultra_minimal_cost = 21000 * ultra_minimal_gas_price
-                            
-                            if balance_wei > ultra_minimal_cost:
-                                available_amount = balance_wei - ultra_minimal_cost
-                                print_warning(f"🔥 终极模式: 21000 gas * 0.000000001 gwei (可能失败但值得尝试)")
-                                return 21000, 1, available_amount
+                    # 如果还是付不起，使用更保守的方法
+                    try:
+                        # 尝试获取网络建议的最低gas价格
+                        suggested_gas = web3.eth.gas_price
+                        conservative_gas_price = max(suggested_gas // 3, min_gas_price)
+                        conservative_gas_cost = min_gas_limit * conservative_gas_price
                         
-                        print_error(f"💔 金额过小，无法支付任何gas费用")
-                        return 0, 0, 0
+                        if balance_wei > conservative_gas_cost:
+                            available_amount = balance_wei - conservative_gas_cost
+                            print_warning(f"⚡ 保守模式: {min_gas_limit} gas * {conservative_gas_price/1e9:.3f} gwei = {conservative_gas_cost/1e18:.9f} ETH")
+                            return min_gas_limit, conservative_gas_price, available_amount
+                    except Exception:
+                        pass
+                    
+                    print_error(f"💔 粉尘金额过小，无法支付网络最低gas费用")
+                    print_info(f"   余额: {balance_wei/1e18:.9f} ETH")
+                    print_info(f"   最低gas费: {min_gas_cost/1e18:.9f} ETH")
+                    return 0, 0, 0
             
             # 正常金额处理
             base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
@@ -1943,24 +1949,65 @@ class TransferManager:
                 estimated_gas_cost = gas_limit * gas_data['gas_price']
                 
                 if native_balance < estimated_gas_cost:
-                    # 检查ERC20代币价值，只有价值大于1美元才发送通知
-                    token_price = await self.monitoring_app.price_checker.get_token_price_usd(
-                        token_info['symbol'], 
-                        token_info.get('contract_address')
-                    ) if self.monitoring_app else None
+                    # 🎯 智能gas费用优化尝试
+                    print_warning(f"原生代币余额不足，尝试优化gas费用...")
                     
-                    token_value_usd = (token_info['balance'] * token_price) if token_price else 0
+                    try:
+                        # 尝试使用最低gas费用模式
+                        min_gas_limit = 65000  # ERC-20转账最小gas limit
+                        
+                        # 获取网络基础费用
+                        try:
+                            latest_block = web3.eth.get_block('latest')
+                            base_fee = getattr(latest_block, 'baseFeePerGas', None)
+                            if base_fee:
+                                min_gas_price = int(base_fee * 1.1)  # 基础费用1.1倍
+                            else:
+                                min_gas_price = gas_data['gas_price'] // 5  # 原价格的1/5
+                        except Exception:
+                            min_gas_price = gas_data['gas_price'] // 5
+                        
+                        min_gas_price = max(min_gas_price, 1000000000)  # 最低1 gwei
+                        min_estimated_cost = min_gas_limit * min_gas_price
+                        
+                        if native_balance >= min_estimated_cost:
+                            print_success(f"💎 启用低gas模式: {min_gas_limit} gas * {min_gas_price/1e9:.3f} gwei")
+                            transaction_data['gas'] = min_gas_limit
+                            
+                            # 更新gas价格
+                            if 'gasPrice' in transaction_data:
+                                transaction_data['gasPrice'] = min_gas_price
+                            elif 'maxFeePerGas' in transaction_data:
+                                transaction_data['maxFeePerGas'] = min_gas_price
+                                transaction_data['maxPriorityFeePerGas'] = min(min_gas_price // 10, 1000000000)
+                            
+                            estimated_gas_cost = min_estimated_cost
+                        else:
+                            # 检查ERC20代币价值，只有价值大于1美元才发送通知
+                            token_price = await self.monitoring_app.price_checker.get_token_price_usd(
+                                token_info['symbol'], 
+                                token_info.get('contract_address')
+                            ) if self.monitoring_app else None
+                            
+                            token_value_usd = (token_info['balance'] * token_price) if token_price else 0
+                            
+                            if token_value_usd >= 1.0:  # 只有价值>=1美元才发送通知
+                                await self._send_erc20_gas_shortage_notification(
+                                    from_address, token_info, chain_config, 
+                                    min_estimated_cost, native_balance, token_price, token_value_usd,
+                                    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+                                )
+                            else:
+                                print_info(f"💡 ERC20代币 {token_info['symbol']} 价值过低 (${token_value_usd:.4f})，跳过通知")
+                            
+                            raise ValueError(f"原生代币余额不足支付gas费用: 需要 {min_estimated_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
                     
-                    if token_value_usd >= 1.0:  # 只有价值>=1美元才发送通知
-                        await self._send_erc20_gas_shortage_notification(
-                            from_address, token_info, chain_config, 
-                            estimated_gas_cost, native_balance, token_price, token_value_usd,
-                            TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-                        )
-                    else:
-                        print_info(f"💡 ERC20代币 {token_info['symbol']} 价值过低 (${token_value_usd:.4f})，跳过通知")
-                    
-                    raise ValueError(f"原生代币余额不足支付gas费用: 需要 {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
+                    except ValueError:
+                        # 重新抛出ValueError（余额不足）
+                        raise
+                    except Exception as e:
+                        print_warning(f"gas优化失败: {e}")
+                        raise ValueError(f"原生代币余额不足支付gas费用: 需要 {estimated_gas_cost/1e18:.8f} {chain_config['native_token']}, 余额 {native_balance/1e18:.8f}")
                 
                 # 安全设置gas价格 - 避免参数冲突
                 try:
@@ -2904,7 +2951,9 @@ class MonitoringApp:
                         # 主要主网 - Alchemy稳定支持
                         "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
                         "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
-                        "ZKSYNC_ERA", "POLYGON_ZKEVM", "AVALANCHE_C", "BSC_MAINNET", 
+                        # "ZKSYNC_ERA",  # 暂时移除 - API不稳定
+                        # "POLYGON_ZKEVM",  # 暂时移除 - API不稳定
+                        "AVALANCHE_C", "BSC_MAINNET", 
                         "BLAST", "LINEA", "SCROLL", "ZORA",
                         
                         # 测试网 - 稳定支持
