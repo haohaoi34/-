@@ -1604,7 +1604,7 @@ class TransferManager:
                 web3 = Web3(provider)
                 
                 # 为某些链添加POA中间件
-                if chain_config['chain_id'] in [56, 137, 250, 43114]:  # BSC, Polygon, Fantom, Avalanche
+                if chain_config['chain_id'] in [56, 137, 250, 43114, 59144]:  # BSC, Polygon, Fantom, Avalanche, Linea
                     try:
                         # 尝试新版本的中间件注入方式
                         if callable(geth_poa_middleware):
@@ -1713,6 +1713,15 @@ class TransferManager:
                     print_error(f"💔 粉尘金额过小，无法支付网络最低gas费用")
                     print_info(f"   余额: {balance_wei/1e18:.9f} ETH")
                     print_info(f"   最低gas费: {min_gas_cost/1e18:.9f} ETH")
+                    print_info(f"   差额: {(min_gas_cost - balance_wei)/1e18:.9f} ETH")
+                    
+                    # 如果差额太大（超过10倍），就不要尝试了
+                    if min_gas_cost > balance_wei * 10:
+                        print_warning(f"💀 金额过小，跳过转账尝试")
+                        return 0, 0, 0
+                    
+                    # 对于差额不大的情况，给一个提示但仍返回0
+                    print_info(f"🤏 金额接近可转账阈值，但仍然不足")
                     return 0, 0, 0
             
             # 正常金额处理
@@ -1779,12 +1788,14 @@ class TransferManager:
                     print_warning(f"Gas价格异常，使用最小值: {gas_price/1e9:.2f} gwei")
                 
                 # 🎯 粉尘金额自动重新计算gas参数
-                if balance_wei <= Web3.to_wei(0.001, 'ether') and available_amount <= 0:
+                if balance_wei <= Web3.to_wei(0.001, 'ether'):
                     print_info(f"💨 粉尘金额重新计算gas参数...")
                     gas_limit, gas_price, available_amount = await self.estimate_smart_gas(
                         from_address, to_address, balance_wei, chain_config, False
                     )
                     total_needed = gas_limit * gas_price
+                    if available_amount > 0:
+                        print_success(f"✅ 粉尘优化成功，可转账金额: {available_amount/1e18:.9f} ETH")
                 
                 if available_amount <= 0 or balance_wei < total_needed:
                     logging.warning(f"余额不足以支付gas费用 {chain_config['name']}: 余额 {balance_wei/1e18:.9f}, gas费用 {total_needed/1e18:.9f}")
@@ -2764,8 +2775,15 @@ class MonitoringApp:
                         # 如果转账失败，添加到失败缓存中
                         if result and not result.get('success'):
                             error_msg = result.get('error', '')
-                            # 只缓存余额不足类型的失败，这类失败短期内不会改变
-                            if "余额不足" in error_msg or "insufficient funds" in error_msg.lower():
+                            # 缓存多种类型的失败，避免重复尝试
+                            cache_conditions = [
+                                "余额不足" in error_msg,
+                                "insufficient funds" in error_msg.lower(),
+                                "max fee per gas less than block base fee" in error_msg.lower(),
+                                "金额过小，跳过转账尝试" in error_msg
+                            ]
+                            
+                            if any(cache_conditions):
                                 self.failed_transfers_cache.add(cache_key)
                                 print(f"{Fore.GRAY}📝 已缓存失败转账: {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
                         if result and result.get('success'):
