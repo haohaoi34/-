@@ -1658,11 +1658,58 @@ class TransferManager:
                 else:
                     base_gas_limit = 21000  # 原生代币转账基础gas
             
-            # 简化gas价格调整，确保gas价格不为零
+            # 获取基础gas价格
             base_gas_price = gas_data.get('gas_price', 20000000000)  # 默认20 gwei
             if base_gas_price <= 0:
                 base_gas_price = 20000000000  # 如果价格为零，使用20 gwei
             
+            # 🎯 粉尘金额特殊处理：使用最低gas价格和最小gas limit
+            dust_threshold = Web3.to_wei(0.001, 'ether')  # 0.001 ETH以下视为粉尘
+            
+            if not is_erc20 and balance_wei <= dust_threshold:
+                print_info(f"💨 检测到粉尘金额，启用超低gas模式")
+                
+                # 使用网络最低gas价格（不加倍数）
+                min_gas_price = max(base_gas_price // 10, 1000000000)  # 最低1 gwei
+                
+                # 使用最小gas limit
+                if chain_config['chain_id'] in [421614, 42161]:  # Arbitrum
+                    min_gas_limit = 21000  # Arbitrum最小
+                else:
+                    min_gas_limit = 21000  # 标准最小
+                
+                # 计算最小gas成本
+                min_gas_cost = min_gas_limit * min_gas_price
+                
+                # 检查是否还有足够余额
+                if balance_wei > min_gas_cost:
+                    available_amount = balance_wei - min_gas_cost
+                    print_success(f"💎 粉尘优化: {min_gas_limit} gas * {min_gas_price/1e9:.3f} gwei = {min_gas_cost/1e18:.9f} ETH")
+                    return min_gas_limit, min_gas_price, available_amount
+                else:
+                    # 如果连最低gas都付不起，尝试极端模式
+                    ultra_low_gas_price = 1000000000  # 1 gwei 绝对最低
+                    ultra_low_gas_cost = min_gas_limit * ultra_low_gas_price
+                    
+                    if balance_wei > ultra_low_gas_cost:
+                        available_amount = balance_wei - ultra_low_gas_cost
+                        print_warning(f"⚡ 极限模式: {min_gas_limit} gas * {ultra_low_gas_price/1e9:.1f} gwei = {ultra_low_gas_cost/1e18:.9f} ETH")
+                        return min_gas_limit, ultra_low_gas_price, available_amount
+                    else:
+                        # 🔥 终极粉尘模式：尝试使用绝对最低参数
+                        if balance_wei > 21000:  # 至少要能支付基础gas
+                            ultra_minimal_gas_price = 1  # 0.000000001 gwei (理论最低)
+                            ultra_minimal_cost = 21000 * ultra_minimal_gas_price
+                            
+                            if balance_wei > ultra_minimal_cost:
+                                available_amount = balance_wei - ultra_minimal_cost
+                                print_warning(f"🔥 终极模式: 21000 gas * 0.000000001 gwei (可能失败但值得尝试)")
+                                return 21000, 1, available_amount
+                        
+                        print_error(f"💔 金额过小，无法支付任何gas费用")
+                        return 0, 0, 0
+            
+            # 正常金额处理
             base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
             gas_price_multiplier = 1.2
             if chain_config['chain_id'] in [1, 42161, 10]:  # 主网、Arbitrum、Optimism
@@ -1718,6 +1765,21 @@ class TransferManager:
                 
                 # 检查智能gas估算结果
                 total_needed = gas_limit * gas_price
+                
+                # 修复：如果gas价格为0，使用最小gas价格
+                if gas_price <= 0:
+                    gas_price = 1000000000  # 1 gwei 最小值
+                    total_needed = gas_limit * gas_price
+                    print_warning(f"Gas价格异常，使用最小值: {gas_price/1e9:.2f} gwei")
+                
+                # 🎯 粉尘金额自动重新计算gas参数
+                if balance_wei <= Web3.to_wei(0.001, 'ether') and available_amount <= 0:
+                    print_info(f"💨 粉尘金额重新计算gas参数...")
+                    gas_limit, gas_price, available_amount = await self.estimate_smart_gas(
+                        from_address, to_address, balance_wei, chain_config, False
+                    )
+                    total_needed = gas_limit * gas_price
+                
                 if available_amount <= 0 or balance_wei < total_needed:
                     logging.warning(f"余额不足以支付gas费用 {chain_config['name']}: 余额 {balance_wei/1e18:.9f}, gas费用 {total_needed/1e18:.9f}")
                     print_warning(f"取消重试 {chain_config['name']}: 余额不足以支付gas费用")
@@ -2068,6 +2130,7 @@ class MonitoringApp:
         self.config = {}
         self.monitoring_active = False
         self.blocked_chains_cache = set()  # 缓存已屏蔽的链，避免重复数据库查询
+        self.failed_transfers_cache = set()  # 缓存失败的转账，避免重复尝试
         self.db_semaphore = asyncio.Semaphore(20)  # 增加并发数据库操作数量，提升速度
         
         # 轮次统计 - 初始化所有必要属性
@@ -2575,15 +2638,23 @@ class MonitoringApp:
             
             print_success(f"第 {round_count} 轮完成，执行 {transfer_count} 笔转账")
             
+            # 每10轮清理一次失败转账缓存，避免缓存过大
+            if round_count % 10 == 0 and len(self.failed_transfers_cache) > 0:
+                print_info(f"🧹 清理失败转账缓存: {len(self.failed_transfers_cache)} 条记录")
+                self.failed_transfers_cache.clear()
+            
             # 显示API使用统计
             if self.alchemy_api:
-                usage_stats = self.alchemy_api.get_usage_stats()
-                print_info(f"📊 API使用统计:")
-                print_info(f"   当前速率: {usage_stats['current_cu_rate']} CU/s")
-                print_info(f"   本轮消耗: {self.round_cu_usage:,} CU")
-                print_info(f"   月度使用: {usage_stats['monthly_usage']:,} / {usage_stats['monthly_limit']:,} CU ({usage_stats['usage_percentage']:.1f}%)")
-                print_info(f"   每日预算: {usage_stats['daily_budget']:,} CU")
-                print_info(f"   剩余天数: {usage_stats['days_remaining']} 天")
+                try:
+                    usage_stats = self.alchemy_api.get_usage_stats()
+                    print_info(f"📊 API使用统计:")
+                    print_info(f"   当前速率: {usage_stats.get('current_cu_rate', 0)} CU/s")
+                    print_info(f"   本轮消耗: {self.round_cu_usage:,} CU")
+                    print_info(f"   月度使用: {usage_stats.get('monthly_usage', 0):,} / {usage_stats.get('monthly_limit', 0):,} CU ({usage_stats.get('usage_percentage', 0):.1f}%)")
+                    print_info(f"   每日预算: {usage_stats.get('daily_budget', 0):,} CU")
+                    print_info(f"   剩余天数: {usage_stats.get('days_remaining', 0)} 天")
+                except Exception as e:
+                    print_warning(f"获取API统计失败: {e}")
             
             # 动态计算暂停时间（对于负载均衡器减少暂停时间）
             try:
@@ -2622,12 +2693,34 @@ class MonitoringApp:
                     total_tokens += 1
                     if token_info['balance'] > 0:
                         has_balance = True
+                        
+                        # 生成失败转账缓存键
+                        cache_key = f"{address}:{chain_config['chain_id']}:{token_info.get('symbol', 'UNKNOWN')}:{token_info.get('type', 'unknown')}"
+                        
+                        # 检查是否已经失败过，避免重复尝试相同的无效转账
+                        if cache_key in self.failed_transfers_cache:
+                            print(f"{Fore.YELLOW}⚠️ 跳过已知失败转账: {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
+                            continue
+                        
                         # 取消最小额度阈值限制，任何大于0的余额都进行转账
                         balance = token_info['balance']
                         balance_str = f"{balance:.6f}" if balance >= 1 else f"{balance:.12f}"
-                        print(f"{Fore.RED}🔴 发现余额: {balance_str} {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
+                        
+                        # 🎯 粉尘金额特殊标识
+                        if token_info.get('type') == 'native' and balance <= 0.001:
+                            print(f"{Fore.YELLOW}💨 发现粉尘余额: {balance_str} {token_info['symbol']} ({chain_name}) - 启用超低gas模式{Style.RESET_ALL}")
+                        else:
+                            print(f"{Fore.RED}🔴 发现余额: {balance_str} {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
                         
                         result = await self.execute_transfer(address_info, chain_config, token_info)
+                        
+                        # 如果转账失败，添加到失败缓存中
+                        if result and not result.get('success'):
+                            error_msg = result.get('error', '')
+                            # 只缓存余额不足类型的失败，这类失败短期内不会改变
+                            if "余额不足" in error_msg or "insufficient funds" in error_msg.lower():
+                                self.failed_transfers_cache.add(cache_key)
+                                print(f"{Fore.GRAY}📝 已缓存失败转账: {token_info['symbol']} ({chain_name}){Style.RESET_ALL}")
                         if result and result.get('success'):
                             transfer_value_usd = 0.0
                             try:
