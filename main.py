@@ -1497,6 +1497,12 @@ class AlchemyAPI:
                 base_fee = int(result['baseFeePerGas'][0], 16)
                 priority_fee = int(result['reward'][0][0], 16) if result['reward'] else 2000000000  # 2 gwei
                 
+                # opBNB特殊处理：使用超低gas价格模仿OKX策略
+                if chain_config['chain_id'] == 204:  # opBNB
+                    base_fee = 101000  # 超低0.000101 gwei，模仿OKX策略
+                    priority_fee = 0
+                    print_info(f"💡 opBNB超低gas模式: {base_fee/1e9:.6f} gwei (模仿OKX)")
+                
                 self.record_success()  # 记录成功
                 return {
                     "base_fee": base_fee,
@@ -1522,6 +1528,12 @@ class AlchemyAPI:
             data = response.json()
             if 'result' in data:
                 gas_price = int(data['result'], 16)
+                
+                # opBNB特殊处理：使用超低gas价格模仿OKX策略
+                if chain_config['chain_id'] == 204:  # opBNB
+                    gas_price = 101000  # 超低0.000101 gwei，模仿OKX策略
+                    print_info(f"💡 opBNB超低gas模式: {gas_price/1e9:.6f} gwei (模仿OKX)")
+                
                 # 确保gas价格不为零
                 if gas_price > 0:
                     self.record_success()  # 记录成功
@@ -1533,9 +1545,9 @@ class AlchemyAPI:
                     }
                 else:
                     print_warning(f"Gas价格为0，使用最小值 {chain_config['name']}")
-                    # opBNB链使用更低的gas价格
+                    # opBNB链使用超低gas价格
                     if chain_config['chain_id'] == 204:  # opBNB
-                        gas_price = 1010000  # 0.00101 gwei, 基于成功交易的实际数据
+                        gas_price = 101000  # 超低0.000101 gwei，模仿OKX策略
                     else:
                         gas_price = 1000000000  # 1 gwei minimum
                     self.record_success()  # 记录成功
@@ -1551,7 +1563,7 @@ class AlchemyAPI:
             
         # 默认gas价格 - 确保不为零
         if chain_config['chain_id'] == 204:  # opBNB
-            default_gas = 1010000  # 0.00101 gwei, 基于成功交易的实际数据
+            default_gas = 101000  # 超低0.000101 gwei，模仿OKX策略
         else:
             default_gas = 20000000000  # 20 gwei
         print_warning(f"使用默认gas价格 {chain_config['name']}: {default_gas/1e9:.6f} gwei")
@@ -1667,9 +1679,9 @@ class TransferManager:
             
             # 获取基础gas价格
             if chain_config['chain_id'] == 204:  # opBNB
-                base_gas_price = gas_data.get('gas_price', 1010000)  # 默认0.00101 gwei for opBNB
+                base_gas_price = gas_data.get('gas_price', 101000)  # 超低0.000101 gwei，模仿OKX
                 if base_gas_price <= 0:
-                    base_gas_price = 1010000  # 如果价格为零，使用0.00101 gwei
+                    base_gas_price = 101000  # 如果价格为零，使用超低价格
             else:
                 base_gas_price = gas_data.get('gas_price', 20000000000)  # 默认20 gwei
                 if base_gas_price <= 0:
@@ -1692,13 +1704,13 @@ class TransferManager:
                     else:
                         # 如果没有基础费用信息，使用保守的低价格
                         if chain_config['chain_id'] == 204:  # opBNB
-                            min_gas_price = max(base_gas_price // 5, 505000)  # 最低0.000505 gwei for opBNB
+                            min_gas_price = max(base_gas_price // 5, 50500)  # 超低价格，模仿OKX
                         else:
                             min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
                 except Exception as e:
                     print_warning(f"无法获取基础费用: {e}")
                     if chain_config['chain_id'] == 204:  # opBNB
-                        min_gas_price = max(base_gas_price // 5, 505000)  # 最低0.000505 gwei for opBNB
+                        min_gas_price = max(base_gas_price // 5, 50500)  # 超低价格，模仿OKX
                     else:
                         min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
                 
@@ -1744,7 +1756,7 @@ class TransferManager:
             
             # 正常金额处理
             if chain_config['chain_id'] == 204:  # opBNB
-                base_gas_price = max(base_gas_price, 1010000)  # 至少0.00101 gwei for opBNB
+                base_gas_price = max(base_gas_price, 101000)  # 超低0.000101 gwei，模仿OKX
             else:
                 base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
             gas_price_multiplier = 1.2
@@ -1807,7 +1819,7 @@ class TransferManager:
                 # 修复：如果gas价格为0，使用最小gas价格
                 if gas_price <= 0:
                     if chain_config['chain_id'] == 204:  # opBNB
-                        gas_price = 1010000  # 0.00101 gwei for opBNB
+                        gas_price = 101000  # 超低0.000101 gwei，模仿OKX
                     else:
                         gas_price = 1000000000  # 1 gwei 最小值
                     total_needed = gas_limit * gas_price
@@ -2005,7 +2017,7 @@ class TransferManager:
                             min_gas_price = gas_data['gas_price'] // 5
                         
                         if chain_config['chain_id'] == 204:  # opBNB
-                            min_gas_price = max(min_gas_price, 1010000)  # 最低0.00101 gwei for opBNB
+                            min_gas_price = max(min_gas_price, 101000)  # 超低0.000101 gwei，模仿OKX
                         else:
                             min_gas_price = max(min_gas_price, 1000000000)  # 最低1 gwei
                         min_estimated_cost = min_gas_limit * min_gas_price
@@ -2065,8 +2077,8 @@ class TransferManager:
                         transaction_data['gasPrice'] = max(gas_data['gas_price'], 25000000)  # 最少0.025 gwei
                         transaction_data['gas'] = 200000  # ZKsync需要更多gas
                     elif chain_config['chain_id'] == 204:  # opBNB
-                        # opBNB使用实际成功交易的gas价格
-                        transaction_data['gasPrice'] = max(gas_data['gas_price'], 1010000)  # 最少0.00101 gwei
+                        # opBNB使用超低gas价格，模仿OKX策略
+                        transaction_data['gasPrice'] = max(gas_data['gas_price'], 101000)  # 超低0.000101 gwei
                         transaction_data['gas'] = 21000  # 标准gas限制
                     elif 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:
                         # EIP-1559支持的链
@@ -3010,7 +3022,7 @@ class MonitoringApp:
                                 "name": chain_name,
                                 "chain_id": chain_info['chain_id'],
                                 "recipient_address": TARGET_ADDRESS,
-                                "min_amount": "0.000001"  # 基于成功交易数据，实际gas费用约0.000000032 BNB
+                                "min_amount": "0.0000005"  # 超低门槛，模仿OKX策略，确保0.01美金都能转出
                             })
 
                     self.config = {
