@@ -2156,15 +2156,25 @@ class MonitoringApp:
         else:
             print_info("未找到PRIVATE_KEYS环境变量，需要手动导入")
         
-        # 使用环境变量中的API密钥配置负载均衡器
-        api_keys = [
+        # 硬编码API密钥配置（优先使用）
+        hardcoded_api_keys = [
+            "olq_SkZ9bg2R6kBMIS2-L",
+            "B068RgsZ3lfHLgiYuH36L", 
+            "aad36gwoDDP-Sxl8AI4Tu"
+        ]
+        
+        # 优先使用硬编码密钥，环境变量作为备用
+        env_api_keys = [
             key.strip() 
             for key in os.getenv("ALCHEMY_API_KEYS", "").split(',') 
             if key.strip()
         ]
         
+        # 合并API密钥：硬编码 + 环境变量
+        api_keys = hardcoded_api_keys + env_api_keys
+        
         if not api_keys:
-            print_error("未找到Alchemy API密钥，请在.env文件中配置ALCHEMY_API_KEYS")
+            print_error("未找到任何Alchemy API密钥")
             return
 
         print_info(f"配置负载均衡器，使用 {len(api_keys)} 个API密钥")
@@ -2758,10 +2768,10 @@ class MonitoringApp:
                 try:
                     # 将私钥写入.env
                     joined_keys = ",".join(private_keys)
-                    # 安全改进：不直接写入.env文件，提醒用户手动配置
-                    print_warning("为了安全，请手动将以下内容添加到.env文件中：")
-                    print_info("PRIVATE_KEYS=\"[您的私钥，用逗号分隔]\"")
-                    print_warning("注意：存储明文私钥存在安全风险，请确保文件权限安全")
+                    # API密钥已硬编码到程序中，无需手动配置.env文件
+                    print_success("✅ API密钥已内置到程序中，无需额外配置")
+                    print_info("💡 如需使用其他API密钥，可在.env文件中配置ALCHEMY_API_KEYS")
+                    print_warning("⚠️  注意：存储明文私钥存在安全风险，请确保环境安全")
 
                     # 重新初始化地址列表
                     self.addresses = []
